@@ -6,18 +6,31 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      version_code:
+        description: "Android versionCode (must increase)"
+        required: true
+        default: "2"
+        type: string
+      version_name:
+        description: "Android versionName"
+        required: true
+        default: "1.1"
+        type: string
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
-    name: Build signed Android release APK
+    name: Build and publish Vendor APK
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: main
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -30,6 +43,52 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+
+      - name: Set release version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          VERSION_CODE: ${{ inputs.version_code }}
+          VERSION_NAME: ${{ inputs.version_name }}
+        run: |
+          python3 <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          code = os.environ["VERSION_CODE"]
+          name = os.environ["VERSION_NAME"]
+
+          if not code.isdigit() or int(code) < 1:
+              raise SystemExit("version_code must be a positive integer")
+
+          if not re.fullmatch(r"[0-9]+\.[0-9]+(\.[0-9]+)?", name):
+              raise SystemExit("Use a version such as 1.1 or 1.1.0")
+
+          path = Path("android/app/build.gradle")
+          source = path.read_text()
+
+          source, count_code = re.subn(
+              r"(?m)^(\s*versionCode\s+)\d+",
+              lambda m: m.group(1) + code,
+              source,
+              count=1,
+          )
+          source, count_name = re.subn(
+              r'(?m)^(\s*versionName\s+)"[^"]+"',
+              lambda m: m.group(1) + '"' + name + '"',
+              source,
+              count=1,
+          )
+
+          if count_code != 1 or count_name != 1:
+              raise SystemExit(
+                  "Could not safely update versionCode/versionName "
+                  "in android/app/build.gradle. Check the file format."
+              )
+
+          path.write_text(source)
+          print(f"Building Vendor {name} (versionCode {code})")
+          PY
 
       - name: Install npm dependencies
         run: npm ci
@@ -50,18 +109,9 @@ jobs:
           KEY_ALIAS: ${{ secrets.VENDOR_UPLOAD_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.VENDOR_UPLOAD_KEY_PASSWORD }}
         run: |
-          test -n "$STORE_PASSWORD" || {
-            echo "Missing store password secret"
-            exit 1
-          }
-          test -n "$KEY_ALIAS" || {
-            echo "Missing key alias secret"
-            exit 1
-          }
-          test -n "$KEY_PASSWORD" || {
-            echo "Missing key password secret"
-            exit 1
-          }
+          test -n "$STORE_PASSWORD" || exit 1
+          test -n "$KEY_ALIAS" || exit 1
+          test -n "$KEY_PASSWORD" || exit 1
 
           mkdir -p "$HOME/.gradle"
           export STORE_PASSWORD KEY_ALIAS KEY_PASSWORD
@@ -91,16 +141,75 @@ jobs:
                   file.write(f"{key}={escape(value)}\n")
           PY
 
-      - name: Build release APK
+      - name: Build signed release APK
         working-directory: android
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease
 
-      - name: Upload signed release APK
+      - name: Prepare APK
+        run: |
+          mkdir -p release-output
+          APK="$(find android/app/build/outputs/apk/release \
+            -maxdepth 1 -name '*.apk' -print -quit)"
+          test -n "$APK" || {
+            echo "Release APK not found"
+            exit 1
+          }
+          cp "$APK" release-output/vendor-release.apk
+          sha256sum release-output/vendor-release.apk
+
+      - name: Upload Actions artifact
         uses: actions/upload-artifact@v4
         with:
           name: vendor-release-apk
-          path: android/app/build/outputs/apk/release/*.apk
-          if-no-files-found: error
+          path: release-output/vendor-release.apk
           retention-days: 14
+
+      - name: Generate release manifest
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          VERSION_CODE: ${{ inputs.version_code }}
+          VERSION_NAME: ${{ inputs.version_name }}
+        run: |
+          python3 <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          manifest = {
+              "versionCode": int(os.environ["VERSION_CODE"]),
+              "versionName": os.environ["VERSION_NAME"],
+              "mandatory": True,
+              "releaseNotes": f"Vendor app version {os.environ['VERSION_NAME']}",
+              "apkUrl": (
+                  "https://github.com/chethanvishvin/vendor/"
+                  "releases/latest/download/vendor-release.apk"
+              ),
+          }
+
+          Path("docs").mkdir(exist_ok=True)
+          Path("docs/version.json").write_text(
+              json.dumps(manifest, indent=2) + "\n"
+          )
+          PY
+
+      - name: Commit version manifest
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/version.json
+          git commit -m "Publish Vendor version ${{ inputs.version_name }}" || true
+          git push origin HEAD:main
+
+      - name: Publish GitHub Release
+        if: github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ inputs.version_name }}
+          name: Vendor v${{ inputs.version_name }}
+          target_commitish: main
+          generate_release_notes: true
+          make_latest: true
+          files: release-output/vendor-release.apk
