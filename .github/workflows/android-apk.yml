@@ -1,5 +1,5 @@
 
-name: Build Android Release APK
+name: Vendor Android Release APK
 
 on:
   push:
@@ -11,81 +11,96 @@ permissions:
   contents: read
 
 jobs:
-  build-release:
-    name: Build Signed Release APK
+  build:
+    name: Build signed Android release APK
     runs-on: ubuntu-latest
-    timeout-minutes: 45
 
     steps:
-      - name: Checkout source code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: "22"
           cache: npm
 
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: "17"
 
-      - name: Install dependencies
+      - name: Install npm dependencies
         run: npm ci
 
-      - name: Prepare release keystore
+      - name: Restore release keystore
         env:
-          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          KEYSTORE_BASE64: ${{ secrets.VENDOR_KEYSTORE_BASE64 }}
         run: |
-          if [ -z "$RELEASE_KEYSTORE_BASE64" ]; then
-            echo "ERROR: RELEASE_KEYSTORE_BASE64 secret is missing."
+          test -n "$KEYSTORE_BASE64" || {
+            echo "Missing VENDOR_KEYSTORE_BASE64 secret"
             exit 1
-          fi
+          }
+          echo "$KEYSTORE_BASE64" | base64 --decode > android/app/vendor-release.keystore
 
-          mkdir -p android/app
-          echo "$RELEASE_KEYSTORE_BASE64" | base64 --decode \
-            > android/app/release.keystore
+      - name: Configure release signing
+        env:
+          STORE_PASSWORD: ${{ secrets.VENDOR_UPLOAD_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.VENDOR_UPLOAD_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.VENDOR_UPLOAD_KEY_PASSWORD }}
+        run: |
+          test -n "$STORE_PASSWORD" || {
+            echo "Missing store password secret"
+            exit 1
+          }
+          test -n "$KEY_ALIAS" || {
+            echo "Missing key alias secret"
+            exit 1
+          }
+          test -n "$KEY_PASSWORD" || {
+            echo "Missing key password secret"
+            exit 1
+          }
 
-          test -s android/app/release.keystore
+          mkdir -p "$HOME/.gradle"
+          export STORE_PASSWORD KEY_ALIAS KEY_PASSWORD
 
-      - name: Build signed release APK
+          python3 <<'PY'
+          import os
+          from pathlib import Path
+
+          def escape(value):
+              value = value.replace("\\", "\\\\")
+              for char in ("=", ":", "#", "!"):
+                  value = value.replace(char, "\\" + char)
+              if value.startswith(" "):
+                  value = "\\" + value
+              return value
+
+          props = {
+              "VENDOR_UPLOAD_STORE_FILE": "vendor-release.keystore",
+              "VENDOR_UPLOAD_KEY_ALIAS": os.environ["KEY_ALIAS"],
+              "VENDOR_UPLOAD_STORE_PASSWORD": os.environ["STORE_PASSWORD"],
+              "VENDOR_UPLOAD_KEY_PASSWORD": os.environ["KEY_PASSWORD"],
+          }
+
+          path = Path.home() / ".gradle" / "gradle.properties"
+          with path.open("w", encoding="iso-8859-1") as file:
+              for key, value in props.items():
+                  file.write(f"{key}={escape(value)}\n")
+          PY
+
+      - name: Build release APK
         working-directory: android
-        env:
-          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
-          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
-          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: |
-          if [ -z "$RELEASE_STORE_PASSWORD" ] || \
-             [ -z "$RELEASE_KEY_ALIAS" ] || \
-             [ -z "$RELEASE_KEY_PASSWORD" ]; then
-            echo "ERROR: One or more release signing secrets are missing."
-            exit 1
-          fi
-
           chmod +x gradlew
-          ./gradlew --no-daemon assembleRelease
+          ./gradlew assembleRelease
 
-      - name: Verify release APK
-        run: |
-          APK_PATH="android/app/build/outputs/apk/release"
-
-          if ! compgen -G "$APK_PATH/*.apk" > /dev/null; then
-            echo "ERROR: No release APK was generated."
-            exit 1
-          fi
-
-          ls -lh "$APK_PATH"/*.apk
-
-      - name: Upload release APK
+      - name: Upload signed release APK
         uses: actions/upload-artifact@v4
         with:
-          name: react-native-release-apk
+          name: vendor-release-apk
           path: android/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
           retention-days: 14
-
-      - name: Clean up release keystore
-        if: always()
-        run: rm -f android/app/release.keystore
