@@ -148,6 +148,7 @@ jobs:
           ./gradlew assembleRelease
 
       - name: Prepare APK
+        id: prepare_apk
         run: |
           mkdir -p release-output
           APK="$(find android/app/build/outputs/apk/release \
@@ -157,7 +158,9 @@ jobs:
             exit 1
           }
           cp "$APK" release-output/vendor-release.apk
-          sha256sum release-output/vendor-release.apk
+          SHA256="$(sha256sum release-output/vendor-release.apk | awk '{print $1}')"
+          echo "Calculated SHA-256: $SHA256"
+          echo "apk_sha256=$SHA256" >> "$GITHUB_OUTPUT"
 
       - name: Upload Actions artifact
         uses: actions/upload-artifact@v4
@@ -171,11 +174,16 @@ jobs:
         env:
           VERSION_CODE: ${{ inputs.version_code }}
           VERSION_NAME: ${{ inputs.version_name }}
+          APK_SHA256: ${{ steps.prepare_apk.outputs.apk_sha256 }}
         run: |
           python3 <<'PY'
           import json
           import os
           from pathlib import Path
+
+          sha256 = os.environ.get("APK_SHA256", "").strip().lower()
+          if not sha256 or len(sha256) != 64:
+              raise SystemExit("Missing or invalid APK_SHA256 checksum from prepare_apk step")
 
           manifest = {
               "versionCode": int(os.environ["VERSION_CODE"]),
@@ -186,12 +194,14 @@ jobs:
                   "https://github.com/chethanvishvin/vendor/"
                   "releases/latest/download/vendor-release.apk"
               ),
+              "sha256": sha256,
           }
 
           Path("docs").mkdir(exist_ok=True)
           Path("docs/version.json").write_text(
               json.dumps(manifest, indent=2) + "\n"
           )
+          print(f"Generated manifest with SHA-256: {sha256}")
           PY
 
       - name: Commit version manifest
@@ -200,7 +210,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add docs/version.json
-          git commit -m "Publish Vendor version ${{ inputs.version_name }}" || true
+          git commit -m "Publish Vendor version ${{ inputs.version_name }} [skip ci]" || true
           git push origin HEAD:main
 
       - name: Publish GitHub Release

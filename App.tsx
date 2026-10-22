@@ -1,11 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   StyleSheet,
   View,
+  Text,
   ActivityIndicator,
   AppState,
   Platform,
   ToastAndroid,
+  Image,
+  TouchableOpacity,
 } from 'react-native';
 import {
   SafeAreaProvider,
@@ -15,9 +18,14 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 import { LoginScreen } from './src/screens/LoginScreen';
 import { HomeScreen } from './src/screens/HomeScreen';
+import { MandatoryUpdateScreen } from './src/screens/MandatoryUpdateScreen';
 import { NetworkStatusBar } from './src/components/NetworkStatusBar';
 import { VendorProfile } from './src/types';
 import { syncAllOfflineSubmissions } from './src/db/sqliteService';
+import {
+  checkAppUpdate,
+  UpdateCheckResult,
+} from './src/services/updateService';
 
 const SESSION_KEY = '@vendor_session';
 const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
@@ -25,11 +33,55 @@ const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
 export default function App() {
   const [currentVendor, setCurrentVendor] = useState<VendorProfile | null>(null);
   const [isRestoringSession, setIsRestoringSession] = useState(true);
-
   const [isJustLoggedIn, setIsJustLoggedIn] = useState(false);
 
-  // Background auto-sync on network reconnect & every 4 hours
+  // Mandatory Update Gate State
+  const [updateResult, setUpdateResult] = useState<UpdateCheckResult>({
+    status: 'CHECK_FAILED',
+  });
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(true);
+
+  // Core update check function
+  const runUpdateCheck = useCallback(async () => {
+    setIsCheckingUpdate(true);
+    try {
+      const res = await checkAppUpdate();
+      setUpdateResult(res);
+    } catch (err: any) {
+      setUpdateResult({
+        status: 'CHECK_FAILED',
+        error: err?.message || 'Failed to verify required application version.',
+      });
+    } finally {
+      setIsCheckingUpdate(false);
+    }
+  }, []);
+
+  // 1. Initial cold-launch check
   useEffect(() => {
+    runUpdateCheck();
+  }, [runUpdateCheck]);
+
+  // 2. Lifecycle check: When returning from installer or settings, recheck version
+  useEffect(() => {
+    const appStateSub = AppState.addEventListener('change', nextState => {
+      if (nextState === 'active') {
+        if (
+          updateResult.status === 'UPDATE_REQUIRED' ||
+          updateResult.status === 'CHECK_FAILED'
+        ) {
+          runUpdateCheck();
+        }
+      }
+    });
+
+    return () => appStateSub.remove();
+  }, [updateResult.status, runUpdateCheck]);
+
+  // Background auto-sync on network reconnect & every 4 hours (active only when UP_TO_DATE)
+  useEffect(() => {
+    if (updateResult.status !== 'UP_TO_DATE') return;
+
     const triggerSyncIfOnline = async () => {
       try {
         const state = await NetInfo.fetch();
@@ -47,22 +99,22 @@ export default function App() {
       }
     };
 
-    // 1. Initial check on mount
+    // Initial check on mount
     triggerSyncIfOnline();
 
-    // 2. Automatically trigger when device comes online
+    // Automatically trigger when device comes online
     const unsubscribeNet = NetInfo.addEventListener(state => {
       if (state.isConnected && state.isInternetReachable !== false) {
         triggerSyncIfOnline();
       }
     });
 
-    // 3. Periodic trigger every 4 hours
+    // Periodic trigger every 4 hours
     const fourHourTimer = setInterval(() => {
       triggerSyncIfOnline();
     }, FOUR_HOURS_MS);
 
-    // 4. Trigger when app comes back to foreground
+    // Trigger when app comes back to foreground
     const appStateSub = AppState.addEventListener('change', nextState => {
       if (nextState === 'active') {
         triggerSyncIfOnline();
@@ -74,10 +126,12 @@ export default function App() {
       clearInterval(fourHourTimer);
       appStateSub.remove();
     };
-  }, []);
+  }, [updateResult.status]);
 
-  // Restore saved session on app launch
+  // Restore saved session on app launch (only if up to date)
   useEffect(() => {
+    if (updateResult.status !== 'UP_TO_DATE') return;
+
     const restoreSession = async () => {
       try {
         const saved = await AsyncStorage.getItem(SESSION_KEY);
@@ -91,7 +145,7 @@ export default function App() {
       }
     };
     restoreSession();
-  }, []);
+  }, [updateResult.status]);
 
   const handleLoginSuccess = async (vendor: VendorProfile) => {
     try {
@@ -109,6 +163,84 @@ export default function App() {
     setCurrentVendor(null);
   };
 
+  // 1. Initial Update Verification Loading Screen
+  if (isCheckingUpdate) {
+    return (
+      <SafeAreaProvider>
+        <View style={styles.splashContainer}>
+          <View style={styles.splashLogoBadge}>
+            <Image
+              source={require('./src/assets/logo.png')}
+              style={styles.splashLogo}
+              resizeMode="contain"
+            />
+          </View>
+          <ActivityIndicator size="large" color="#0284C7" />
+          <Text style={styles.splashText}>Verifying application version...</Text>
+        </View>
+      </SafeAreaProvider>
+    );
+  }
+
+  // 2. Mandatory Update Required Gate (Blocks all app navigation & features)
+  if (updateResult.status === 'UPDATE_REQUIRED' && updateResult.manifest) {
+    return (
+      <SafeAreaProvider>
+        <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+          <NetworkStatusBar />
+          <MandatoryUpdateScreen
+            manifest={updateResult.manifest}
+            installedInfo={updateResult.installedInfo}
+            onUpdateCompleted={runUpdateCheck}
+            onRetryCheck={runUpdateCheck}
+          />
+        </SafeAreaView>
+      </SafeAreaProvider>
+    );
+  }
+
+  // 3. Update Verification Failed Screen (Fail-closed policy with retry)
+  if (updateResult.status === 'CHECK_FAILED') {
+    return (
+      <SafeAreaProvider>
+        <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+          <NetworkStatusBar />
+          <View style={styles.checkFailedContainer}>
+            <View style={styles.splashLogoBadge}>
+              <Image
+                source={require('./src/assets/logo.png')}
+                style={styles.splashLogo}
+                resizeMode="contain"
+              />
+            </View>
+            <View style={styles.errorIconBadge}>
+              <Text style={styles.errorIconText}>⚠️</Text>
+            </View>
+            <Text style={styles.failedTitle}>Update Check Required</Text>
+            <Text style={styles.failedDesc}>
+              Unable to verify the mandatory application update status over the network.
+              An internet connection is required on launch to ensure your app version complies with platform security.
+            </Text>
+
+            {updateResult.error && (
+              <View style={styles.errorDetailCard}>
+                <Text style={styles.errorDetailText}>{updateResult.error}</Text>
+              </View>
+            )}
+
+            <TouchableOpacity
+              style={styles.retryButton}
+              onPress={runUpdateCheck}
+              activeOpacity={0.8}>
+              <Text style={styles.retryButtonText}>🔄 Retry Connection</Text>
+            </TouchableOpacity>
+          </View>
+        </SafeAreaView>
+      </SafeAreaProvider>
+    );
+  }
+
+  // 4. Session restoration screen (Only reached once verified UP_TO_DATE)
   if (isRestoringSession) {
     return (
       <SafeAreaProvider>
@@ -119,6 +251,7 @@ export default function App() {
     );
   }
 
+  // 5. Existing Normal Application Tree
   return (
     <SafeAreaProvider>
       <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
@@ -155,6 +288,90 @@ const styles = StyleSheet.create({
     backgroundColor: '#F8FAFC',
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: 24,
+  },
+  splashLogoBadge: {
+    width: 80,
+    height: 80,
+    borderRadius: 22,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 4,
+    marginBottom: 24,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  splashLogo: {
+    width: 52,
+    height: 52,
+  },
+  splashText: {
+    marginTop: 16,
+    fontSize: 14,
+    color: '#64748B',
+    fontWeight: '500',
+  },
+  checkFailedContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 28,
+  },
+  errorIconBadge: {
+    marginBottom: 12,
+  },
+  errorIconText: {
+    fontSize: 36,
+  },
+  failedTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#0F172A',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  failedDesc: {
+    fontSize: 14,
+    color: '#64748B',
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 20,
+  },
+  errorDetailCard: {
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    borderRadius: 12,
+    padding: 14,
+    width: '100%',
+    marginBottom: 24,
+  },
+  errorDetailText: {
+    color: '#B91C1C',
+    fontSize: 12,
+    lineHeight: 18,
+    textAlign: 'center',
+  },
+  retryButton: {
+    backgroundColor: '#0284C7',
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 32,
+    alignItems: 'center',
+    shadowColor: '#0284C7',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  retryButtonText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '700',
   },
 });
-
