@@ -11,38 +11,86 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  build-android:
+    name: Build React Native APK
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
-      - name: Checkout code
+      # 1. Download the repository source code
+      - name: Checkout source code
         uses: actions/checkout@v4
 
+      # 2. Configure Node.js
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '22'
           cache: npm
 
+      # 3. Configure Java for Android builds
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
 
+      # 4. Verify tool versions
+      - name: Verify build tools
+        run: |
+          node --version
+          npm --version
+          java -version
+
+      # 5. Install JavaScript dependencies
       - name: Install dependencies
         run: npm ci
 
-      - name: Build APK
+      # 6. Generate a debug keystore if the project requires one
+      - name: Generate debug keystore if missing
+        shell: bash
+        run: |
+          mkdir -p android/app
+
+          if [ ! -f android/app/debug.keystore ]; then
+            keytool -genkeypair \
+              -v \
+              -storetype JKS \
+              -keystore android/app/debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+      # 7. Build the debug APK
+      - name: Build debug APK
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew --no-daemon assembleDebug
 
-      - name: Upload APK
+      # 8. Verify that the APK exists
+      - name: Verify APK
+        shell: bash
+        run: |
+          APK_PATH="android/app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$APK_PATH" ]; then
+            echo "ERROR: APK was not generated at $APK_PATH"
+            exit 1
+          fi
+
+          ls -lh "$APK_PATH"
+
+      # 9. Upload APK as a downloadable artifact
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: react-native-debug-apk
-          path: android/app/build/outputs/apk/debug/*.apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
