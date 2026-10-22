@@ -105,6 +105,28 @@ android {
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
         }
     }
+
+    applicationVariants.all { variant ->
+        variant.outputs.all {
+            outputFileName = "Vendor version ${variant.versionName}.apk"
+        }
+        if (variant.buildType.name == 'debug') {
+            variant.assembleProvider.configure {
+                doLast {
+                    def apkDir = file("${layout.buildDirectory.get()}/outputs/apk/debug")
+                    def customApk = new File(apkDir, "Vendor version ${variant.versionName}.apk")
+                    def cliApk = new File(apkDir, "app-debug.apk")
+                    if (customApk.exists()) {
+                        copy {
+                            from customApk
+                            into apkDir
+                            rename { "app-debug.apk" }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 dependencies {

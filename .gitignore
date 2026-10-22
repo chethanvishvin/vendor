@@ -73,3 +73,10 @@ yarn-error.log
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
+
+# Scratch & debug dumps
+*.png
+!android/app/src/main/res/**/*.png
+!ios/**/*.png
+view.xml
+android/app/src/main/assets/index.android.bundle
