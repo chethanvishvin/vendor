@@ -1,0 +1,8 @@
+
+{
+  "versionCode": 1,
+  "versionName": "1.0",
+  "mandatory": true,
+  "releaseNotes": "Vendor app update",
+  "apkUrl": "https://github.com/chethanvishvin/vendor/releases/latest/download/vendor-release.apk"
+}
