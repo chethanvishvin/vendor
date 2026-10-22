@@ -80,3 +80,7 @@ yarn-error.log
 !ios/**/*.png
 view.xml
 android/app/src/main/assets/index.android.bundle
+
+# Android signing keys
+android/app/*.keystore
+android/app/*.jks
