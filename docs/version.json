@@ -1,8 +1,8 @@
 {
-  "versionCode": 4,
-  "versionName": "1.4",
+  "versionCode": 5,
+  "versionName": "1.5",
   "mandatory": true,
-  "releaseNotes": "Vendor app version 1.4",
+  "releaseNotes": "Vendor app version 1.5",
   "apkUrl": "https://github.com/chethanvishvin/vendor/releases/latest/download/vendor-release.apk",
-  "sha256": "5bff964ac51a68859c4fb5acff3c723ee01cf3f64e4136f166fd32ed7c31fdba"
+  "sha256": "2a83488d6ed3c0b03d784bf12d23c30c6623e1e7ebd3b0f22499fc972d327720"
 }
