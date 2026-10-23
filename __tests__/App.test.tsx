@@ -113,7 +113,26 @@ describe('App Root Component', () => {
     expect(allText).toContain('CRITICAL UPDATE REQUIRED');
   });
 
-  it('renders Update Check Required screen when check fails', async () => {
+  it('allows offline access and skips update check when there is no internet', async () => {
+    const NetInfo = require('@react-native-community/netinfo');
+    (NetInfo.fetch as jest.Mock).mockResolvedValueOnce({
+      isConnected: false,
+      isInternetReachable: false,
+    });
+
+    await act(async () => {
+      root = ReactTestRenderer.create(<App />);
+      await new Promise<void>(resolve => setTimeout(() => resolve(), 50));
+    });
+
+    // Verification: update check is completely skipped when offline!
+    expect(updateService.checkAppUpdate).not.toHaveBeenCalled();
+    const allText = extractText(root.toJSON());
+    expect(allText).not.toContain('Update Check Required');
+    expect(allText).not.toContain('CRITICAL UPDATE REQUIRED');
+  });
+
+  it('allows offline access without blocking if update check fails due to network', async () => {
     (updateService.checkAppUpdate as jest.Mock).mockResolvedValueOnce({
       status: 'CHECK_FAILED',
       error: 'Network connection failed',
@@ -125,7 +144,7 @@ describe('App Root Component', () => {
     });
 
     const allText = extractText(root.toJSON());
-    expect(allText).toContain('Update Check Required');
-    expect(allText).toContain('Retry Connection');
+    expect(allText).not.toContain('Update Check Required');
+    expect(allText).not.toContain('Retry Connection');
   });
 });

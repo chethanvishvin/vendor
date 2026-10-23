@@ -169,6 +169,7 @@ describe('Mandatory Update Service', () => {
         downloadAndVerifyApk: jest.fn().mockResolvedValue('/cache/vendor-update.apk'),
         installApk: jest.fn().mockResolvedValue(true),
         deleteUpdateApk: jest.fn().mockResolvedValue(true),
+        isApkAlreadyDownloaded: jest.fn().mockResolvedValue(false),
       };
     });
 

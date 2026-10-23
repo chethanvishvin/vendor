@@ -12,6 +12,7 @@ jest.mock('../src/services/updateService', () => {
     openInstallPermissionSettings: jest.fn(),
     downloadAndVerifyUpdateApk: jest.fn(),
     installUpdateApk: jest.fn(),
+    isApkAlreadyDownloaded: jest.fn(),
   };
 });
 
@@ -46,6 +47,7 @@ describe('MandatoryUpdateScreen UI & Gate Behavior', () => {
     (updateService.canRequestPackageInstalls as jest.Mock).mockResolvedValue(true);
     (updateService.downloadAndVerifyUpdateApk as jest.Mock).mockResolvedValue('/cache/update.apk');
     (updateService.installUpdateApk as jest.Mock).mockResolvedValue(true);
+    (updateService.isApkAlreadyDownloaded as jest.Mock).mockResolvedValue(false);
   });
 
   it('renders mandatory update screen with versions and release notes', () => {
@@ -120,7 +122,7 @@ describe('MandatoryUpdateScreen UI & Gate Behavior', () => {
     expect(updateService.installUpdateApk).toHaveBeenCalled();
   });
 
-  it('displays permission guidance when canRequestPackageInstalls is false', async () => {
+  it('checks permission FIRST and blocks download when canRequestPackageInstalls is false', async () => {
     (updateService.canRequestPackageInstalls as jest.Mock).mockResolvedValue(false);
 
     let testRenderer: any;
@@ -147,9 +149,46 @@ describe('MandatoryUpdateScreen UI & Gate Behavior', () => {
       }
     });
 
+    // Verification: NO download should have been attempted without permission!
+    expect(updateService.downloadAndVerifyUpdateApk).not.toHaveBeenCalled();
+
     const allTextAfter = extractText(testRenderer.toJSON());
     expect(allTextAfter).toContain('Install Permission Required');
     expect(allTextAfter).toContain('Open System Settings');
+  });
+
+  it('directly proceeds to install without downloading if valid APK is already cached', async () => {
+    (updateService.isApkAlreadyDownloaded as jest.Mock).mockResolvedValue(true);
+
+    let testRenderer: any;
+    await act(async () => {
+      testRenderer = renderer.create(
+        <MandatoryUpdateScreen
+          manifest={mockManifest}
+          installedInfo={mockInstalledInfo}
+        />
+      );
+    });
+
+    const allText = extractText(testRenderer.toJSON());
+    expect(allText).toContain('Install Update Now');
+
+    await act(async () => {
+      const allTextNodes = testRenderer.root.findAllByType('Text');
+      const installText = allTextNodes.find((t: any) =>
+        typeof t.props.children === 'string' && t.props.children.includes('Install Update Now')
+      );
+      let parent = installText.parent;
+      while (parent && !parent.props.onPress) {
+        parent = parent.parent;
+      }
+      if (parent && parent.props.onPress) {
+        await parent.props.onPress();
+      }
+    });
+
+    expect(updateService.downloadAndVerifyUpdateApk).not.toHaveBeenCalled();
+    expect(updateService.installUpdateApk).toHaveBeenCalled();
   });
 
   it('displays clear error message and retry button when download fails', async () => {

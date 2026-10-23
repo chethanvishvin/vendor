@@ -121,6 +121,33 @@ class VendorUpdateModule(private val reactContext: ReactApplicationContext) :
                 lowerHost.endsWith(".amazonaws.com")
     }
 
+    private fun calculateFileSha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val buffer = ByteArray(8192)
+        file.inputStream().use { input ->
+            var read: Int
+            while (input.read(buffer).also { read = it } != -1) {
+                digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    @ReactMethod
+    fun isApkAlreadyDownloaded(expectedSha256: String, promise: Promise) {
+        try {
+            val apkFile = File(File(reactContext.cacheDir, "updates"), "vendor-update.apk")
+            if (apkFile.exists() && apkFile.length() > 0 && expectedSha256.isNotBlank()) {
+                val existingHash = calculateFileSha256(apkFile)
+                promise.resolve(existingHash.equals(expectedSha256.trim(), ignoreCase = true))
+            } else {
+                promise.resolve(false)
+            }
+        } catch (e: Exception) {
+            promise.resolve(false)
+        }
+    }
+
     @ReactMethod
     fun downloadAndVerifyApk(urlStr: String, expectedSha256: String, promise: Promise) {
         if (!isDownloading.compareAndSet(false, true)) {
@@ -149,12 +176,29 @@ class VendorUpdateModule(private val reactContext: ReactApplicationContext) :
                     throw IllegalArgumentException("Invalid SHA-256 checksum in version manifest")
                 }
 
-                // 2. Prepare destination files
+                // 2. Prepare destination files & check if valid APK is already downloaded
                 val updatesDir = File(reactContext.cacheDir, "updates")
                 if (!updatesDir.exists()) {
                     updatesDir.mkdirs()
                 }
                 val apkFile = File(updatesDir, "vendor-update.apk")
+
+                if (apkFile.exists() && apkFile.length() > 0) {
+                    val existingHash = calculateFileSha256(apkFile)
+                    if (existingHash.equals(expectedSha256.trim(), ignoreCase = true)) {
+                        val progressMap = Arguments.createMap().apply {
+                            putDouble("receivedBytes", apkFile.length().toDouble())
+                            putDouble("totalBytes", apkFile.length().toDouble())
+                            putInt("percent", 100)
+                        }
+                        sendEvent("onDownloadProgress", progressMap)
+                        promise.resolve(apkFile.absolutePath)
+                        return@Thread
+                    } else {
+                        apkFile.delete()
+                    }
+                }
+
                 val tempFile = File(updatesDir, "vendor-update.apk.tmp")
                 if (tempFile.exists()) {
                     tempFile.delete()

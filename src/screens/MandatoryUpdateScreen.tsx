@@ -10,6 +10,7 @@ import {
   BackHandler,
   AppState,
   Platform,
+  Alert,
 } from 'react-native';
 import {
   VersionManifest,
@@ -19,6 +20,7 @@ import {
   openInstallPermissionSettings,
   downloadAndVerifyUpdateApk,
   installUpdateApk,
+  isApkAlreadyDownloaded,
 } from '../services/updateService';
 
 interface MandatoryUpdateScreenProps {
@@ -73,6 +75,72 @@ export const MandatoryUpdateScreen: React.FC<MandatoryUpdateScreenProps> = ({
     }
   }, []);
 
+  // Download & install execution helper
+  const executeDownloadAndInstall = useCallback(async () => {
+    setErrorMessage(null);
+    setUpdateState('DOWNLOADING');
+    setStatusMessage('Connecting to secure download server...');
+    setDownloadProgress({ receivedBytes: 0, totalBytes: 0, percent: 0 });
+
+    try {
+      setStatusMessage('Downloading update package...');
+      await downloadAndVerifyUpdateApk(manifest, progress => {
+        setDownloadProgress(progress);
+        setStatusMessage(`Downloading update: ${progress.percent}%`);
+      });
+
+      setUpdateState('READY_TO_INSTALL');
+      setStatusMessage('Launching Android installer...');
+      await installUpdateApk();
+    } catch (err: any) {
+      setUpdateState('ERROR');
+      const msg = err?.message || 'Download or verification failed. Please try again.';
+      setErrorMessage(msg);
+      setStatusMessage('');
+    }
+  }, [manifest]);
+
+  // Proceed with installation or download once permission is confirmed
+  const proceedAfterPermissionGranted = useCallback(async () => {
+    setErrorMessage(null);
+    try {
+      const alreadyDownloaded = await isApkAlreadyDownloaded(manifest.sha256).catch(() => false);
+      if (alreadyDownloaded) {
+        setUpdateState('READY_TO_INSTALL');
+        setStatusMessage('Launching Android installer...');
+        await installUpdateApk();
+      } else {
+        await executeDownloadAndInstall();
+      }
+    } catch (err: any) {
+      setUpdateState('ERROR');
+      setErrorMessage(err?.message || 'Failed to proceed with installation.');
+    }
+  }, [manifest.sha256, executeDownloadAndInstall]);
+
+  // Check if valid APK is already cached on disk on mount
+  useEffect(() => {
+    let isMounted = true;
+    (async () => {
+      try {
+        const isDownloaded = await isApkAlreadyDownloaded(manifest.sha256);
+        if (isMounted && isDownloaded) {
+          const allowed = await checkPermissions();
+          if (allowed) {
+            setUpdateState('READY_TO_INSTALL');
+            setStatusMessage('Update package is verified and ready to install.');
+          } else {
+            setUpdateState('PERMISSION_REQUIRED');
+            setStatusMessage('System permission required before installing update.');
+          }
+        }
+      } catch (_) {}
+    })();
+    return () => {
+      isMounted = false;
+    };
+  }, [manifest.sha256, checkPermissions]);
+
   // Handle returning from background (e.g. system settings or package installer)
   useEffect(() => {
     const appStateSub = AppState.addEventListener('change', async nextState => {
@@ -87,60 +155,54 @@ export const MandatoryUpdateScreen: React.FC<MandatoryUpdateScreenProps> = ({
           const allowed = await checkPermissions();
           if (allowed) {
             setErrorMessage(null);
-            setUpdateState('READY_TO_INSTALL');
-            setStatusMessage('Permission granted. Ready to install.');
+            setStatusMessage('Permission granted. Proceeding with update...');
+            await proceedAfterPermissionGranted();
           }
         }
       }
     });
 
     return () => appStateSub.remove();
-  }, [checkPermissions, onUpdateCompleted, updateState]);
-
-  // Initiate Download & Installation flow
-  const handleStartUpdate = async () => {
-    setErrorMessage(null);
-    setUpdateState('DOWNLOADING');
-    setStatusMessage('Connecting to secure download server...');
-    setDownloadProgress({ receivedBytes: 0, totalBytes: 0, percent: 0 });
-
-    try {
-      // 1. Download & verify SHA-256
-      setStatusMessage('Downloading update package...');
-      await downloadAndVerifyUpdateApk(manifest, progress => {
-        setDownloadProgress(progress);
-        setStatusMessage(`Downloading update: ${progress.percent}%`);
-      });
-
-      setUpdateState('VERIFYING');
-      setStatusMessage('Integrity verified. Preparing package installer...');
-
-      // 2. Check install permission on Android 8+
-      const allowed = await checkPermissions();
-      if (!allowed) {
-        setUpdateState('PERMISSION_REQUIRED');
-        setStatusMessage('System permission required to install updates.');
-        return;
-      }
-
-      // 3. Trigger package installer
-      setUpdateState('READY_TO_INSTALL');
-      setStatusMessage('Launching Android installer...');
-      await installUpdateApk();
-    } catch (err: any) {
-      setUpdateState('ERROR');
-      const msg = err?.message || 'Download or verification failed. Please try again.';
-      setErrorMessage(msg);
-      setStatusMessage('');
-    }
-  };
+  }, [checkPermissions, onUpdateCompleted, updateState, proceedAfterPermissionGranted]);
 
   const handleOpenSettings = async () => {
     try {
+      const allowed = await checkPermissions();
+      if (allowed) {
+        await proceedAfterPermissionGranted();
+        return;
+      }
       await openInstallPermissionSettings();
     } catch (err: any) {
       setErrorMessage(err?.message || 'Could not open settings.');
     }
+  };
+
+  // Initiate Download & Installation flow: Permission checked FIRST!
+  const handleStartUpdate = async () => {
+    setErrorMessage(null);
+
+    // 1. Check install permission on Android 8+ FIRST before downloading
+    const allowed = await checkPermissions();
+    if (!allowed) {
+      setUpdateState('PERMISSION_REQUIRED');
+      setStatusMessage('Install permission required before downloading.');
+      Alert.alert(
+        'Install Permission Required',
+        'Android requires you to grant permission before installing updates from the Vendor app. Tap "Open Settings" to enable "Allow from this source".',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Open Settings',
+            onPress: () => handleOpenSettings(),
+          },
+        ]
+      );
+      return;
+    }
+
+    // 2. Permission already granted -> proceed to download and install
+    await proceedAfterPermissionGranted();
   };
 
   const handleManualInstallTrigger = async () => {
@@ -296,9 +358,9 @@ export const MandatoryUpdateScreen: React.FC<MandatoryUpdateScreenProps> = ({
           ) : updateState === 'PERMISSION_REQUIRED' ? (
             <TouchableOpacity
               style={styles.primaryButton}
-              onPress={handleManualInstallTrigger}
+              onPress={handleOpenSettings}
               activeOpacity={0.8}>
-              <Text style={styles.primaryButtonText}>Retry Installation</Text>
+              <Text style={styles.primaryButtonText}>⚙️ Open System Settings</Text>
             </TouchableOpacity>
           ) : (
             <TouchableOpacity

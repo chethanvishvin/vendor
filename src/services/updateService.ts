@@ -253,6 +253,17 @@ export async function downloadAndVerifyUpdateApk(
 }
 
 /**
+ * Check whether a valid APK matching the expected checksum is already downloaded.
+ */
+export async function isApkAlreadyDownloaded(expectedSha256: string): Promise<boolean> {
+  const module = NativeModules.VendorUpdateModule;
+  if (!module?.isApkAlreadyDownloaded) {
+    return false;
+  }
+  return await module.isApkAlreadyDownloaded(expectedSha256);
+}
+
+/**
  * Triggers Android package installer via FileProvider.
  */
 export async function installUpdateApk(): Promise<boolean> {

@@ -37,40 +37,61 @@ export default function App() {
 
   // Mandatory Update Gate State
   const [updateResult, setUpdateResult] = useState<UpdateCheckResult>({
-    status: 'CHECK_FAILED',
+    status: 'UP_TO_DATE',
   });
-  const [isCheckingUpdate, setIsCheckingUpdate] = useState(true);
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
 
-  // Core update check function
-  const runUpdateCheck = useCallback(async () => {
-    setIsCheckingUpdate(true);
+  // Core update check function: Only checks when internet connection is available
+  const runUpdateCheck = useCallback(async (showSplash = false) => {
     try {
+      const netState = await NetInfo.fetch();
+      const isOnline = Boolean(
+        netState.isConnected && netState.isInternetReachable !== false
+      );
+
+      // When there is no internet, skip update check and allow offline usage immediately
+      if (!isOnline) {
+        if (showSplash) {
+          setIsCheckingUpdate(false);
+        }
+        return;
+      }
+
+      if (showSplash) {
+        setIsCheckingUpdate(true);
+      }
+
       const res = await checkAppUpdate();
-      setUpdateResult(res);
+
+      // Only enforce gate if a mandatory update is explicitly required
+      if (res.status === 'UPDATE_REQUIRED') {
+        setUpdateResult(res);
+      } else if (res.status === 'UP_TO_DATE') {
+        setUpdateResult(res);
+      } else {
+        // If check failed over network, continue in offline mode without blocking
+        console.warn('Update check failed over network, continuing in offline mode:', res.error);
+      }
     } catch (err: any) {
-      setUpdateResult({
-        status: 'CHECK_FAILED',
-        error: err?.message || 'Failed to verify required application version.',
-      });
+      console.warn('Error during update check, continuing in offline mode:', err);
     } finally {
-      setIsCheckingUpdate(false);
+      if (showSplash) {
+        setIsCheckingUpdate(false);
+      }
     }
   }, []);
 
-  // 1. Initial cold-launch check
+  // 1. Initial launch check (silent, non-blocking for offline readiness)
   useEffect(() => {
-    runUpdateCheck();
+    runUpdateCheck(false);
   }, [runUpdateCheck]);
 
-  // 2. Lifecycle check: When returning from installer or settings, recheck version
+  // 2. Lifecycle check: When returning from installer or settings, recheck version silently
   useEffect(() => {
     const appStateSub = AppState.addEventListener('change', nextState => {
       if (nextState === 'active') {
-        if (
-          updateResult.status === 'UPDATE_REQUIRED' ||
-          updateResult.status === 'CHECK_FAILED'
-        ) {
-          runUpdateCheck();
+        if (updateResult.status === 'UPDATE_REQUIRED') {
+          runUpdateCheck(false);
         }
       }
     });
@@ -78,10 +99,8 @@ export default function App() {
     return () => appStateSub.remove();
   }, [updateResult.status, runUpdateCheck]);
 
-  // Background auto-sync on network reconnect & every 4 hours (active only when UP_TO_DATE)
+  // Background auto-sync and update check on network reconnect & every 4 hours
   useEffect(() => {
-    if (updateResult.status !== 'UP_TO_DATE') return;
-
     const triggerSyncIfOnline = async () => {
       try {
         const state = await NetInfo.fetch();
@@ -99,19 +118,21 @@ export default function App() {
       }
     };
 
-    // Initial check on mount
+    // Initial sync check on mount
     triggerSyncIfOnline();
 
-    // Automatically trigger when device comes online
+    // Automatically trigger sync AND check for updates ONLY when internet comes
     const unsubscribeNet = NetInfo.addEventListener(state => {
       if (state.isConnected && state.isInternetReachable !== false) {
         triggerSyncIfOnline();
+        runUpdateCheck(false);
       }
     });
 
     // Periodic trigger every 4 hours
     const fourHourTimer = setInterval(() => {
       triggerSyncIfOnline();
+      runUpdateCheck(false);
     }, FOUR_HOURS_MS);
 
     // Trigger when app comes back to foreground
@@ -126,11 +147,11 @@ export default function App() {
       clearInterval(fourHourTimer);
       appStateSub.remove();
     };
-  }, [updateResult.status]);
+  }, [runUpdateCheck]);
 
-  // Restore saved session on app launch (only if up to date)
+  // Restore saved session on app launch (allowed offline; only blocked if mandatory update required)
   useEffect(() => {
-    if (updateResult.status !== 'UP_TO_DATE') return;
+    if (updateResult.status === 'UPDATE_REQUIRED') return;
 
     const restoreSession = async () => {
       try {
@@ -163,7 +184,7 @@ export default function App() {
     setCurrentVendor(null);
   };
 
-  // 1. Initial Update Verification Loading Screen
+  // 1. Initial Update Verification Loading Screen (only if actively checking with splash)
   if (isCheckingUpdate) {
     return (
       <SafeAreaProvider>
@@ -182,7 +203,7 @@ export default function App() {
     );
   }
 
-  // 2. Mandatory Update Required Gate (Blocks all app navigation & features)
+  // 2. Mandatory Update Required Gate (Blocks all app navigation & features when mandatory update exists)
   if (updateResult.status === 'UPDATE_REQUIRED' && updateResult.manifest) {
     return (
       <SafeAreaProvider>
@@ -191,56 +212,15 @@ export default function App() {
           <MandatoryUpdateScreen
             manifest={updateResult.manifest}
             installedInfo={updateResult.installedInfo}
-            onUpdateCompleted={runUpdateCheck}
-            onRetryCheck={runUpdateCheck}
+            onUpdateCompleted={() => runUpdateCheck(false)}
+            onRetryCheck={() => runUpdateCheck(true)}
           />
         </SafeAreaView>
       </SafeAreaProvider>
     );
   }
 
-  // 3. Update Verification Failed Screen (Fail-closed policy with retry)
-  if (updateResult.status === 'CHECK_FAILED') {
-    return (
-      <SafeAreaProvider>
-        <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
-          <NetworkStatusBar />
-          <View style={styles.checkFailedContainer}>
-            <View style={styles.splashLogoBadge}>
-              <Image
-                source={require('./src/assets/logo.png')}
-                style={styles.splashLogo}
-                resizeMode="contain"
-              />
-            </View>
-            <View style={styles.errorIconBadge}>
-              <Text style={styles.errorIconText}>⚠️</Text>
-            </View>
-            <Text style={styles.failedTitle}>Update Check Required</Text>
-            <Text style={styles.failedDesc}>
-              Unable to verify the mandatory application update status over the network.
-              An internet connection is required on launch to ensure your app version complies with platform security.
-            </Text>
-
-            {updateResult.error && (
-              <View style={styles.errorDetailCard}>
-                <Text style={styles.errorDetailText}>{updateResult.error}</Text>
-              </View>
-            )}
-
-            <TouchableOpacity
-              style={styles.retryButton}
-              onPress={runUpdateCheck}
-              activeOpacity={0.8}>
-              <Text style={styles.retryButtonText}>🔄 Retry Connection</Text>
-            </TouchableOpacity>
-          </View>
-        </SafeAreaView>
-      </SafeAreaProvider>
-    );
-  }
-
-  // 4. Session restoration screen (Only reached once verified UP_TO_DATE)
+  // 3. Session restoration screen (Only reached once verified or in offline mode)
   if (isRestoringSession) {
     return (
       <SafeAreaProvider>
