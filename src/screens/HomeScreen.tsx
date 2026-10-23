@@ -490,7 +490,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           style={styles.logoutBtn}
           onPress={handleConfirmLogout}
           activeOpacity={0.7}>
-          <Text style={styles.logoutBtnText}>Exit</Text>
+          <Text style={styles.logoutBtnText}>Logout</Text>
         </TouchableOpacity>
       </View>
 
