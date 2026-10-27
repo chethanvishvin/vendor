@@ -39,6 +39,7 @@ import {
 interface InstallationProofSectionProps {
   station: StationItem;
   currentVendor: VendorProfile;
+  isWorker?: boolean;
   onSuccess: () => void;
 }
 
@@ -73,6 +74,60 @@ export interface SerialMatchResult {
   status: 'empty' | 'match' | 'mismatch' | 'no_assigned';
   message: string;
 }
+
+/**
+ * Preferred display ordering for photo proof upload cards:
+ * Order: 6, 4, 8, 5, 10, 9, 7
+ * Any other types appearing in the future will be appended after these in ascending order.
+ */
+export const PREFERRED_FILE_TYPE_ORDER = [6, 4, 8, 5, 10, 9, 7];
+
+export const sortFileTypesByCustomOrder = (
+  types: VendorFileType[],
+): VendorFileType[] => {
+  if (!Array.isArray(types)) return [];
+  return [...types].sort((a, b) => {
+    const idA = Number(a.VendorFileTypeId);
+    const idB = Number(b.VendorFileTypeId);
+    const indexA = PREFERRED_FILE_TYPE_ORDER.indexOf(idA);
+    const indexB = PREFERRED_FILE_TYPE_ORDER.indexOf(idB);
+
+    if (indexA !== -1 && indexB !== -1) {
+      return indexA - indexB;
+    }
+    if (indexA !== -1) {
+      return -1;
+    }
+    if (indexB !== -1) {
+      return 1;
+    }
+    return idA - idB;
+  });
+};
+
+export const isSwitchSerialType = (type: VendorFileType): boolean => {
+  if (!type) return false;
+  const id = Number(type.VendorFileTypeId);
+  if (id === 11) return true;
+  const name = (type.VendorFileTypeName || '').toLowerCase().replace(/[\s_\-]/g, '');
+  return name === 'switchserialnumber' || name === 'switchserial';
+};
+
+export const isResilientSerialType = (type: VendorFileType): boolean => {
+  if (!type) return false;
+  const id = Number(type.VendorFileTypeId);
+  if (id === 12) return true;
+  const name = (type.VendorFileTypeName || '').toLowerCase().replace(/[\s_\-]/g, '');
+  return name === 'resilientserialnumber' || name === 'resilientserial';
+};
+
+export const isAnnexure11Type = (type: VendorFileType): boolean => {
+  if (!type) return false;
+  const id = Number(type.VendorFileTypeId);
+  if (id === 7) return true;
+  const name = (type.VendorFileTypeName || '').toLowerCase().replace(/[\s_\-]/g, '');
+  return name.includes('annexure11') || name.includes('annexure');
+};
 
 /**
  * Normalizes hardware serial numbers by stripping common prefixes (SN:, SL NO:, etc.),
@@ -376,9 +431,59 @@ const stampGeoTag = async (imageUri: string, geoTag: GeoTag): Promise<string> =>
 export const InstallationProofSection: React.FC<InstallationProofSectionProps> = ({
   station,
   currentVendor,
+  isWorker: propIsWorker,
   onSuccess,
 }) => {
+  const isWorker =
+    propIsWorker !== undefined
+      ? propIsWorker
+      : (currentVendor.RoleId === 9 ||
+         currentVendor.userType === 'VendorWorker' ||
+         Boolean(currentVendor.VendorWorkerId) ||
+         Boolean((currentVendor as any)?.WorkerId));
+
+  const workerStationAssignmentId = isWorker
+    ? (station.WorkerStationAssignmentId ||
+       (station as any)?.WorkerStationAssignmentId ||
+       0)
+    : 0;
+
+  const activeWorkerId = isWorker
+    ? (currentVendor.WorkerId ||
+       currentVendor.VendorWorkerId ||
+       (currentVendor as any)?.WorkerId ||
+       station.WorkerId ||
+       (station as any)?.WorkerId ||
+       0)
+    : (currentVendor.VendorWorkerId || 0);
+
+  // Remaining pending photo types from API (if already in Draft status)
+  const pendingTypesFromStation: VendorFileType[] = React.useMemo(() => {
+    if (Array.isArray(station.PendingFileTypes) && station.PendingFileTypes.length > 0) {
+      return station.PendingFileTypes;
+    }
+    if (
+      Array.isArray((station as any).PendingFileTypeIds) &&
+      (station as any).PendingFileTypeIds.length > 0
+    ) {
+      return (station as any).PendingFileTypeIds;
+    }
+    return [];
+  }, [station.PendingFileTypes, (station as any).PendingFileTypeIds]);
+
+  const isDraftStation =
+    station.VendorStatusId === 2 ||
+    (station as any).StatusId === 2 ||
+    station.StatusId === 2 ||
+    station.VendorStatusName === 'Draft' ||
+    (station as any).InstallationSubmissionStatusId === 2 ||
+    pendingTypesFromStation.length > 0;
+
   const [fileTypes, setFileTypes] = useState<VendorFileType[]>([]);
+  const sortedFileTypes = React.useMemo(
+    () => sortFileTypesByCustomOrder(fileTypes),
+    [fileTypes],
+  );
   const [isLoadingTypes, setIsLoadingTypes] = useState<boolean>(true);
   const [selectedFiles, setSelectedFiles] = useState<SelectedFileMap>({});
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
@@ -387,10 +492,13 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
   const [geoTaggingId, setGeoTaggingId] = useState<number | null>(null);
   const [viewingPhoto, setViewingPhoto] = useState<ViewingPhotoInfo | null>(null);
 
-  // Hardware serial numbers & switch firmware state
+  // Hardware serial numbers & switch firmware state (never auto-populate switch and resilient serial numbers)
   const [switchSerialNumber, setSwitchSerialNumber] = useState<string>('');
   const [resilientSerialNumber, setResilientSerialNumber] = useState<string>('');
-  const [switchFirmwareNumber, setSwitchFirmwareNumber] = useState<string>('');
+  const [switchFirmwareNumber, setSwitchFirmwareNumber] = useState<string>(() => {
+    const fw = station.SwitchFirmWareNumber || (station as any).SwitchFirmwareNumber || '';
+    return fw === 'N/A' || fw === 'NA' ? '' : fw;
+  });
 
   // Substation coordinates parsing & overall proximity calculation
   const subLat = parseFloat(String(station.Latitude || '').trim());
@@ -412,7 +520,7 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
       : null;
   const isOverallWithin300m = overallAvgDistance !== null ? overallAvgDistance <= 300 : false;
 
-  // Auto-populate stored photos and hardware drafts from SQLite immediately on mount
+  // Auto-populate stored photos and firmware draft from SQLite immediately on mount
   useEffect(() => {
     let isMounted = true;
     getStationProofDraft(station.ExcelDataId, currentVendor.VendorId).then(draft => {
@@ -420,14 +528,12 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
         if (Object.keys(draft.photos).length > 0) {
           setSelectedFiles(draft.photos);
         }
-        if (draft.switchSerialNumber) {
-          setSwitchSerialNumber(draft.switchSerialNumber);
-        }
-        if (draft.resilientSerialNumber) {
-          setResilientSerialNumber(draft.resilientSerialNumber);
-        }
+        // NEVER auto-populate switchSerialNumber or resilientSerialNumber (must be entered manually by user)
         if (draft.switchFirmwareNumber) {
-          setSwitchFirmwareNumber(draft.switchFirmwareNumber);
+          const fw = draft.switchFirmwareNumber;
+          if (fw !== 'N/A' && fw !== 'NA') {
+            setSwitchFirmwareNumber(fw);
+          }
         }
         setIsDraftRestored(true);
       }
@@ -464,59 +570,37 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
     });
   };
 
-  const handleUseAssignedSwitch = () => {
-    if (station.SwitchSerialNumber) {
-      handleSwitchSerialChange(station.SwitchSerialNumber.trim());
-    }
-  };
-
-  const handleUseAssignedResilient = () => {
-    if (station.ResilientSerialNumber) {
-      handleResilientSerialChange(station.ResilientSerialNumber.trim());
-    }
-  };
-
-  const switchSerialMatch = checkSerialMatch(
-    switchSerialNumber,
-    station.SwitchSerialNumber,
-  );
-  const resilientSerialMatch = checkSerialMatch(
-    resilientSerialNumber,
-    station.ResilientSerialNumber,
-  );
-
-  const hasAssignedSwitchSerial = Boolean(
-    station.SwitchSerialNumber &&
-      station.SwitchSerialNumber.trim() !== '' &&
-      station.SwitchSerialNumber !== '-' &&
-      station.SwitchSerialNumber.toUpperCase() !== 'N/A' &&
-      station.SwitchSerialNumber.toUpperCase() !== 'NOT RECORDED',
-  );
-
-  const hasAssignedResilientSerial = Boolean(
-    station.ResilientSerialNumber &&
-      station.ResilientSerialNumber.trim() !== '' &&
-      station.ResilientSerialNumber !== '-' &&
-      station.ResilientSerialNumber.toUpperCase() !== 'N/A' &&
-      station.ResilientSerialNumber.toUpperCase() !== 'NOT RECORDED',
-  );
-
   useEffect(() => {
     let isMounted = true;
     const loadTypes = async () => {
+      // 1. If station has remaining pending types from Draft, use them directly!
+      if (pendingTypesFromStation.length > 0) {
+        const sorted = sortFileTypesByCustomOrder(pendingTypesFromStation);
+        if (isMounted) {
+          setFileTypes(sorted);
+          setIsLoadingTypes(false);
+        }
+        return;
+      }
+
+      // 2. Otherwise (brand new pending station with StatusId === 1), fetch full dropdown list
       setIsLoadingTypes(true);
       try {
-        const types = await apiService.fetchAssignStationDetailDropdown(2);
+        const types = isWorker
+          ? await apiService.fetchWorkerInsertDropdown(1)
+          : await apiService.fetchAssignStationDetailDropdown(2);
         if (isMounted && types && types.length > 0) {
-          setFileTypes(types);
-          saveCachedFileTypes(types); // Cache in SQLite for offline access
+          const sorted = sortFileTypesByCustomOrder(types);
+          setFileTypes(sorted);
+          saveCachedFileTypes(sorted); // Cache in SQLite for offline access
         }
       } catch (err) {
         console.warn('Network error fetching dropdown types, loading from SQLite cache:', err);
         // Fallback to SQLite cache irrespective of network
         const cached = await getCachedFileTypes();
         if (isMounted && cached && cached.length > 0) {
-          setFileTypes(cached);
+          const sorted = sortFileTypesByCustomOrder(cached);
+          setFileTypes(sorted);
         }
       } finally {
         if (isMounted) setIsLoadingTypes(false);
@@ -527,7 +611,7 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [isWorker, pendingTypesFromStation]);
 
   const requestCameraPermission = async (): Promise<boolean> => {
     if (Platform.OS !== 'android') return true;
@@ -683,7 +767,7 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
         if (asset) {
           const fileUri = asset.taggedUri || asset.uri;
           if (!fileUri) return;
-          const matchedType = fileTypes.find(t => t.VendorFileTypeId === fileTypeId);
+          const matchedType = sortedFileTypes.find(t => t.VendorFileTypeId === fileTypeId);
           const fileExtension = asset.fileName ? asset.fileName.split('.').pop() : 'jpg';
           const fileName = `proof_${fileTypeId}_${Date.now()}.${fileExtension || 'jpg'}`;
           submissionFiles.push({
@@ -699,11 +783,24 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
 
       // Automated 300m geo-fence verification remarks
       const submissionRemarks = buildAutomaticRemarks(station, selectedFiles);
-      const createdBy =
-        currentVendor.CreatedByUserName ||
-        currentVendor.ContactPerson ||
+
+      const workerName =
+        currentVendor.UserName ||
         currentVendor.VendorName ||
-        'Vendor';
+        (station as any).WorkerName ||
+        'Worker';
+      const workerPhone =
+        currentVendor.MobileNumber ||
+        currentVendor.ContactNumber ||
+        (station as any).WorkerMobileNumber ||
+        '';
+
+      const createdBy = isWorker
+        ? (workerPhone ? `${workerName} - ${workerPhone}` : workerName)
+        : (currentVendor.VendorName ||
+           currentVendor.ContactPerson ||
+           currentVendor.CreatedByUserName ||
+           'Vendor');
 
       const routeStationStatusId = Number(
         station.RouteStationStatusId || (station as any).routeStationStatusId || 0,
@@ -713,20 +810,60 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
       const netState = await NetInfo.fetch();
       const isOnline = netState.isConnected === true && netState.isInternetReachable !== false;
 
+      // Prepare fallback serials and firmware so backend non-empty check succeeds
+      const finalSwitchSerial =
+        switchSerialNumber.trim() ||
+        station.SwitchSerialNumber ||
+        (station as any).switchSerialNumber ||
+        'N/A';
+
+      const finalResilientSerial =
+        resilientSerialNumber.trim() ||
+        station.ResilientSerialNumber ||
+        (station as any).resilientSerialNumber ||
+        'N/A';
+
+      const finalSwitchFirmware =
+        switchFirmwareNumber.trim() ||
+        station.SwitchFirmWareNumber ||
+        (station as any).SwitchFirmwareNumber ||
+        'N/A';
+
       if (isOnline) {
         // --- ONLINE: DIRECT API SUBMISSION ---
         try {
           const formData = new FormData();
-          formData.append('ExcelDataId', String(station.ExcelDataId));
-          formData.append('VendorId', String(currentVendor.VendorId));
-          formData.append('Remarks', submissionRemarks);
-          formData.append('CreatedByUserName', createdBy);
-          formData.append('flagId', '2');
-          formData.append('FileTypeId', JSON.stringify(selectedIds));
-          formData.append('SwitchSerialNumber', switchSerialNumber.trim());
-          formData.append('ResilientSerialNumber', resilientSerialNumber.trim());
-          formData.append('SwitchFirmWareNumber', switchFirmwareNumber.trim());
-          formData.append('RouteStationStatusId', String(routeStationStatusId));
+
+          if (isWorker) {
+            // Worker station submission to /vendorWorkerAssign/insertingWorkerStationSubmission
+            formData.append('flagId', '1');
+            formData.append('WorkerStationAssignmentId', String(workerStationAssignmentId));
+            formData.append('WorkerId', String(activeWorkerId));
+            formData.append('ExcelDataId', String(station.ExcelDataId));
+            formData.append('Remarks', submissionRemarks);
+            formData.append('SwitchFirmWareNumber', finalSwitchFirmware);
+            formData.append('SwitchSerialNumber', finalSwitchSerial);
+            formData.append('ResilientSerialNumber', finalResilientSerial);
+            formData.append('CreatedByUserName', createdBy);
+            formData.append('FileTypeIds', JSON.stringify(selectedIds));
+            formData.append('FileTypeId', JSON.stringify(selectedIds));
+          } else {
+            // Vendor station submission to /assignVendor/createInstallationSubmission
+            formData.append('ExcelDataId', String(station.ExcelDataId));
+            formData.append('VendorId', String(currentVendor.VendorId));
+            if (currentVendor.VendorWorkerId) {
+              formData.append('VendorWorkerId', String(currentVendor.VendorWorkerId));
+            }
+            formData.append('Remarks', submissionRemarks);
+            formData.append('CreatedByUserName', createdBy);
+            formData.append('flagId', '2');
+            formData.append('FileTypeId', JSON.stringify(selectedIds));
+            formData.append('FileTypeIds', JSON.stringify(selectedIds));
+            formData.append('SwitchSerialNumber', finalSwitchSerial);
+            formData.append('ResilientSerialNumber', finalResilientSerial);
+            formData.append('SwitchFirmWareNumber', finalSwitchFirmware);
+            formData.append('RouteStationStatusId', String(routeStationStatusId));
+          }
 
           submissionFiles.forEach(file => {
             formData.append('files', {
@@ -736,7 +873,9 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
             } as any);
           });
 
-          const response = await apiService.createInstallationSubmission(formData);
+          const response = isWorker
+            ? await apiService.insertWorkerStationSubmission(formData)
+            : await apiService.createInstallationSubmission(formData);
 
           // Flush draft from SQLite and flush screen state
           await clearStationProofDraft(station.ExcelDataId, currentVendor.VendorId);
@@ -778,14 +917,17 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
         stationName: station.Station,
         voltageClass: station.VoltageClass || '',
         vendorId: currentVendor.VendorId,
+        vendorWorkerId: isWorker ? activeWorkerId : (currentVendor.VendorWorkerId || undefined),
+        workerStationAssignmentId: isWorker ? workerStationAssignmentId : undefined,
+        isWorkerSubmission: isWorker,
         remarks: submissionRemarks,
         createdByUserName: createdBy,
-        flagId: '2',
+        flagId: isWorker ? '1' : '2',
         fileTypeIds: selectedIds,
         files: submissionFiles,
-        switchSerialNumber: switchSerialNumber.trim(),
-        resilientSerialNumber: resilientSerialNumber.trim(),
-        switchFirmwareNumber: switchFirmwareNumber.trim(),
+        switchSerialNumber: finalSwitchSerial,
+        resilientSerialNumber: finalResilientSerial,
+        switchFirmwareNumber: finalSwitchFirmware,
         routeStationStatusId,
       });
 
@@ -829,81 +971,149 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
     }
 
     const selectedIds = Object.keys(selectedFiles).map(id => Number(id));
-    if (selectedIds.length === 0) {
+    const hasAnyPhoto = selectedIds.length > 0;
+
+    // 1. Strict binding check: Switch Serial Number and its photo MUST be submitted together
+    const switchFileType = sortedFileTypes.find(isSwitchSerialType);
+    const hasSwitchPhotoInPending = Boolean(switchFileType);
+    const hasSwitchPhotoSelected = Boolean(
+      switchFileType && selectedFiles[switchFileType.VendorFileTypeId],
+    );
+
+    // 2. Strict binding check: Resilient Serial Number and its photo MUST be submitted together
+    const resilientFileType = sortedFileTypes.find(isResilientSerialType);
+    const hasResilientPhotoInPending = Boolean(resilientFileType);
+    const hasResilientPhotoSelected = Boolean(
+      resilientFileType && selectedFiles[resilientFileType.VendorFileTypeId],
+    );
+
+    const hasAnyHardware =
+      (hasSwitchPhotoInPending && Boolean(switchSerialNumber.trim())) ||
+      (hasResilientPhotoInPending && Boolean(resilientSerialNumber.trim())) ||
+      Boolean(switchFirmwareNumber.trim());
+
+    if (!hasAnyPhoto && !hasAnyHardware) {
       Alert.alert(
-        'Photo Required',
-        'Please upload at least one installation proof photo before submitting.',
+        'Incomplete Submission',
+        'Please attach at least one photo or enter hardware details before submitting.',
       );
       return;
     }
 
-    if (!switchSerialNumber.trim()) {
+    const bindingErrors: string[] = [];
+
+    // Switch Serial binding check: user cannot submit switch serial number without its photo
+    if (hasSwitchPhotoInPending) {
+      if (switchSerialNumber.trim() && !hasSwitchPhotoSelected) {
+        bindingErrors.push(
+          '• Switch Serial Number is entered, but its photo is missing. You cannot submit Switch Serial Number without its photo.',
+        );
+      } else if (!switchSerialNumber.trim() && hasSwitchPhotoSelected) {
+        bindingErrors.push(
+          '• Switch Serial Number photo is captured, but the serial number is empty. Please enter the Switch Serial Number.',
+        );
+      }
+    }
+
+    // Resilient Serial binding check: user cannot submit resilient serial number without its photo
+    if (hasResilientPhotoInPending) {
+      if (resilientSerialNumber.trim() && !hasResilientPhotoSelected) {
+        bindingErrors.push(
+          '• Resilient Serial Number is entered, but its photo is missing. You cannot submit Resilient Serial Number without its photo.',
+        );
+      } else if (!resilientSerialNumber.trim() && hasResilientPhotoSelected) {
+        bindingErrors.push(
+          '• Resilient Serial Number photo is captured, but the serial number is empty. Please enter the Resilient Serial Number.',
+        );
+      }
+    }
+
+    if (bindingErrors.length > 0) {
       Alert.alert(
-        'Missing Switch Serial Number',
-        'Please enter the Switch Serial Number before submitting.',
+        'Photo & Serial Number Binding Error ⚠️',
+        `Serial number and photo must be uploaded together:\n\n${bindingErrors.join(
+          '\n\n',
+        )}\n\nPlease attach the required photo or enter the corresponding serial number.`,
       );
       return;
     }
 
-    if (!resilientSerialNumber.trim()) {
-      Alert.alert(
-        'Missing Resilient Serial Number',
-        'Please enter the Resilient Serial Number before submitting.',
-      );
-      return;
-    }
+    // 3. Annexure-11 check: Annexure-11 should ONLY get submitted when all fields and photos are submitted / getting submitted
+    const annexureFileType = sortedFileTypes.find(isAnnexure11Type);
+    const hasAnnexureSelected = Boolean(
+      annexureFileType && selectedFiles[annexureFileType.VendorFileTypeId],
+    );
 
-    if (!switchFirmwareNumber.trim()) {
-      Alert.alert(
-        'Missing Switch Firmware Version',
-        'Please enter the Switch Firmware Number before submitting.',
-      );
-      return;
-    }
+    if (hasAnnexureSelected) {
+      const missingForAnnexure: string[] = [];
 
-    // Comparison check against assigned records
-    const swMatch = checkSerialMatch(switchSerialNumber, station.SwitchSerialNumber);
-    const resMatch = checkSerialMatch(resilientSerialNumber, station.ResilientSerialNumber);
+      // Check all other photo types in sortedFileTypes
+      sortedFileTypes.forEach(t => {
+        if (!isAnnexure11Type(t)) {
+          if (!selectedFiles[t.VendorFileTypeId]) {
+            missingForAnnexure.push(`• Photo: ${t.VendorFileTypeName} (#${t.VendorFileTypeId})`);
+          }
+        }
+      });
 
-    const mismatches: string[] = [];
-    if (swMatch.status === 'mismatch') {
-      mismatches.push(
-        `• Switch S/N: Entered "${switchSerialNumber.trim()}" vs Assigned "${station.SwitchSerialNumber}"`,
-      );
-    }
-    if (resMatch.status === 'mismatch') {
-      mismatches.push(
-        `• Resilient S/N: Entered "${resilientSerialNumber.trim()}" vs Assigned "${station.ResilientSerialNumber}"`,
-      );
-    }
+      // Check switch serial number if card #11 is present in pending
+      if (hasSwitchPhotoInPending) {
+        if (!switchSerialNumber.trim()) {
+          missingForAnnexure.push('• Field: Switch Serial Number');
+        }
+        if (!hasSwitchPhotoSelected) {
+          missingForAnnexure.push('• Photo: Switch Serial Number Photo Proof (#11)');
+        }
+      }
 
-    if (mismatches.length > 0) {
-      Alert.alert(
-        'Serial Number Mismatch ⚠️',
-        `The following serial numbers do not match the assigned station records:\n\n${mismatches.join(
-          '\n',
-        )}\n\nDo you want to proceed with this submission?`,
-        [
-          { text: 'Review & Edit', style: 'cancel' },
-          {
-            text: 'Proceed Anyway',
-            onPress: () => {
-              if (isSubmittingRef.current) return;
-              isSubmittingRef.current = true;
-              performSubmission(selectedIds);
-            },
-          },
-        ],
-      );
-      return;
+      // Check resilient serial number if card #12 is present in pending
+      if (hasResilientPhotoInPending) {
+        if (!resilientSerialNumber.trim()) {
+          missingForAnnexure.push('• Field: Resilient Serial Number');
+        }
+        if (!hasResilientPhotoSelected) {
+          missingForAnnexure.push('• Photo: Resilient Serial Number Photo Proof (#12)');
+        }
+      }
+
+      // Check switch firmware number
+      const hasFirmwareEntered =
+        Boolean(switchFirmwareNumber.trim()) ||
+        Boolean(
+          station.SwitchFirmWareNumber &&
+          station.SwitchFirmWareNumber !== 'N/A' &&
+          station.SwitchFirmWareNumber !== 'NA',
+        );
+      if (!hasFirmwareEntered) {
+        missingForAnnexure.push('• Field: Switch Firmware Version / Number');
+      }
+
+      if (missingForAnnexure.length > 0) {
+        Alert.alert(
+          'Annexure-11 Submission Restriction ⚠️',
+          `Annexure-11 is the final handover / sign-off document and can only be submitted when all other equipment photos and hardware fields are submitted.\n\nPlease complete the following remaining items first:\n\n${missingForAnnexure.join(
+            '\n',
+          )}`,
+        );
+        return;
+      }
     }
 
     isSubmittingRef.current = true;
     await performSubmission(selectedIds);
   };
 
+  const hasSwitchInPending = sortedFileTypes.some(isSwitchSerialType);
+  const hasResilientInPending = sortedFileTypes.some(isResilientSerialType);
+
   const uploadedCount = Object.keys(selectedFiles).length;
-  const totalCount = fileTypes.length;
+  const totalCount = sortedFileTypes.length;
+  const hasAnyPhoto = uploadedCount > 0;
+  const hasAnyHardware =
+    (hasSwitchInPending && Boolean(switchSerialNumber.trim())) ||
+    (hasResilientInPending && Boolean(resilientSerialNumber.trim())) ||
+    Boolean(switchFirmwareNumber.trim());
+  const isSubmitDisabled = (!hasAnyPhoto && !hasAnyHardware) || isSubmitting;
 
   return (
     <View style={styles.container}>
@@ -919,22 +1129,24 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
         <Text style={styles.subtitle}>
           Capture live photo proof for each equipment. GPS coordinates, address &amp; timestamp will be automatically embedded on each photo.
         </Text>
-
-        {/* Geo-Tag Banner */}
-       
-
-        {/* SQLite Draft Persistence Status Pill */}
-        {/* <View style={styles.sqliteDraftPill}>
-          <Text style={styles.sqliteDraftIcon}>💾</Text>
-          <Text style={styles.sqliteDraftText}>
-            {isDraftRestored
-              ? 'Draft auto-populated from SQLite database'
-              : uploadedCount > 0 || remarks.trim().length > 0
-                ? 'All photos & remarks stored immediately in SQLite'
-                : 'All captured photos & remarks auto-save to SQLite immediately'}
-          </Text>
-        </View> */}
       </View>
+
+      {/* Draft Substation Notice Banner */}
+      {isDraftStation && (
+        <View style={styles.draftNoticeBanner}>
+          <View style={styles.draftNoticeIconWrap}>
+            <Text style={styles.draftNoticeIcon}>📝</Text>
+          </View>
+          <View style={styles.draftNoticeContent}>
+            <Text style={styles.draftNoticeTitle}>Draft Substation (Partial Upload)</Text>
+            <Text style={styles.draftNoticeText}>
+              {totalCount > 0
+                ? `Showing ${totalCount} remaining item${totalCount !== 1 ? 's' : ''} to upload. Nothing is mandatory — upload what you have and submit progress anytime.`
+                : 'All photo types have been uploaded. You can submit or update hardware details.'}
+            </Text>
+          </View>
+        </View>
+      )}
 
       {isLoadingTypes ? (
         <View style={styles.loadingBox}>
@@ -943,7 +1155,7 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
         </View>
       ) : (
         <View style={styles.typesList}>
-          {fileTypes.map(type => {
+          {sortedFileTypes.map(type => {
             const file = selectedFiles[type.VendorFileTypeId];
             const isUploaded = !!file;
             const isTagging = geoTaggingId === type.VendorFileTypeId;
@@ -956,6 +1168,11 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
                   file.geoTag.longitude,
                 )
               : null;
+
+            const isSwitchCard = isSwitchSerialType(type);
+            const isResilientCard = isResilientSerialType(type);
+            const isBoundHardwareCard = isSwitchCard || isResilientCard;
+            const isAnnexureCard = isAnnexure11Type(type);
 
             const handleOpenModal = () => {
               if (!displayUri || !file) return;
@@ -976,6 +1193,7 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
                 key={type.VendorFileTypeId}
                 style={[
                   styles.typeCard,
+                  isBoundHardwareCard ? styles.typeCardBound : null,
                   isUploaded ? styles.typeCardUploaded : null,
                 ]}>
                 <View style={styles.typeCardHeader}>
@@ -983,29 +1201,94 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
                     <Text style={styles.typeNumber}>#{type.VendorFileTypeId}</Text>
                     <Text style={styles.typeName}>{type.VendorFileTypeName}</Text>
                   </View>
-                  <View
-                    style={[
-                      styles.statusPill,
-                      isTagging
-                        ? styles.statusPillTagging
-                        : isUploaded
-                          ? styles.statusPillUploaded
-                          : styles.statusPillPending,
-                    ]}>
-                    <Text
+                  <View style={styles.typeHeaderPillsRow}>
+                    {isBoundHardwareCard && (
+                      <View style={styles.statusPillBound}>
+                        <Text style={styles.statusTextBound}>🔗 Bound S/N + Photo</Text>
+                      </View>
+                    )}
+                    {isAnnexureCard && (
+                      <View style={styles.statusPillAnnexure}>
+                        <Text style={styles.statusTextAnnexure}>📋 Final Handover</Text>
+                      </View>
+                    )}
+                    <View
                       style={[
-                        styles.statusPillText,
+                        styles.statusPill,
                         isTagging
-                          ? styles.statusTextTagging
+                          ? styles.statusPillTagging
                           : isUploaded
-                            ? styles.statusTextUploaded
-                            : styles.statusTextPending,
+                            ? styles.statusPillUploaded
+                            : styles.statusPillPending,
                       ]}>
-                      {isTagging ? '🛰️ Geo-Tagging...' : isUploaded ? '✓ Attached' : 'Pending'}
-                    </Text>
+                      <Text
+                        style={[
+                          styles.statusPillText,
+                          isTagging
+                            ? styles.statusTextTagging
+                            : isUploaded
+                              ? styles.statusTextUploaded
+                              : styles.statusTextPending,
+                        ]}>
+                        {isTagging ? '🛰️ Geo-Tagging...' : isUploaded ? '✓ Attached' : 'Pending'}
+                      </Text>
+                    </View>
                   </View>
                 </View>
 
+                {/* Annexure-11 Notice Banner */}
+                {isAnnexureCard && (
+                  <View style={styles.annexureNoticeBox}>
+                    <Text style={styles.annexureNoticeText}>
+                      ℹ️ Final sign-off: Annexure-11 can only be submitted when all other photos &amp; hardware fields are submitted.
+                    </Text>
+                  </View>
+                )}
+
+                {/* Bound Serial Number Input (for Switch S/N and Resilient S/N) */}
+                {isBoundHardwareCard && (
+                  <View style={styles.boundSerialContainer}>
+                    <View style={styles.boundSerialHeaderRow}>
+                      <View style={styles.boundSerialTitleWrap}>
+                        <Text style={styles.boundSerialIcon}>⌨️</Text>
+                        <Text style={styles.boundSerialTitle}>
+                          {isSwitchCard ? 'Switch Serial Number' : 'Resilient Serial Number'}
+                        </Text>
+                      </View>
+                      <View style={styles.boundActionButtonsRow}>
+                        {Boolean(isSwitchCard ? switchSerialNumber : resilientSerialNumber) && (
+                          <TouchableOpacity
+                            style={styles.clearSerialBtn}
+                            onPress={isSwitchCard ? () => handleSwitchSerialChange('') : () => handleResilientSerialChange('')}
+                            activeOpacity={0.7}>
+                            <Text style={styles.clearSerialBtnText}>✕ Clear</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    </View>
+                    <TextInput
+                      style={styles.hardwareInput}
+                      placeholder={
+                        isSwitchCard
+                          ? 'Enter Switch Serial No. (e.g. 2660H2515XLH)'
+                          : 'Enter Resilient Serial No. (e.g. 202607310903)'
+                      }
+                      placeholderTextColor="#94A3B8"
+                      value={isSwitchCard ? switchSerialNumber : resilientSerialNumber}
+                      onChangeText={isSwitchCard ? handleSwitchSerialChange : handleResilientSerialChange}
+                      autoCapitalize="characters"
+                      autoCorrect={false}
+                    />
+
+                    <View style={styles.boundPhotoSectionDivider}>
+                      <Text style={styles.boundPhotoSectionTitle}>
+                        📷 {isSwitchCard ? 'Switch' : 'Resilient'} Serial Number Photo Proof
+                      </Text>
+                    </View>
+                  </View>
+                )}
+
+                {/* Photo Capture / Preview Container */}
                 {isTagging ? (
                   <View style={styles.geoTaggingOverlay}>
                     <ActivityIndicator size="small" color="#7C3AED" />
@@ -1041,41 +1324,6 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
                           {(file.fileSize / 1024).toFixed(1)} KB
                         </Text>
                       ) : null}
-                      {/* Geo-tag info display with 300m radius validation */}
-                      {/* {file.geoTag && (
-                        <View style={styles.geoTagInfoBox}>
-                          <Text style={styles.geoTagInfoLine} numberOfLines={2}>
-                            📍 {file.geoTag.address}
-                          </Text>
-                          <Text style={styles.geoTagInfoLine}>
-                            🌐 {file.geoTag.latitude.toFixed(5)}°, {file.geoTag.longitude.toFixed(5)}°
-                          </Text>
-                          <Text style={styles.geoTagInfoLine}>
-                            🕐 {file.geoTag.capturedAt}
-                          </Text>
-                          {photoProximity && photoProximity.hasSubstationCoords && (
-                            <View
-                              style={[
-                                styles.proximityBadge,
-                                photoProximity.isWithin300m
-                                  ? styles.proximityBadgeWithin
-                                  : styles.proximityBadgeOutside,
-                              ]}>
-                              <Text
-                                style={[
-                                  styles.proximityBadgeText,
-                                  photoProximity.isWithin300m
-                                    ? styles.proximityTextWithin
-                                    : styles.proximityTextOutside,
-                                ]}>
-                                {photoProximity.isWithin300m
-                                  ? `✓ Within 300m (${photoProximity.distanceMeters}m from substation)`
-                                  : `⚠️ Outside 300m (${photoProximity.distanceMeters}m from substation)`}
-                              </Text>
-                            </View>
-                          )}
-                        </View>
-                      )} */}
                       <View style={styles.fileActionRow}>
                         <TouchableOpacity
                           style={styles.viewBtn}
@@ -1112,11 +1360,11 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
         </View>
       )}
 
-      {/* Hardware Serial Numbers Verification & Firmware Card */}
+      {/* Switch Firmware Verification Card */}
       <View style={styles.hardwareCard}>
         <View style={styles.hardwareCardHeader}>
           <View style={styles.hardwareHeaderTitleRow}>
-            <Text style={styles.hardwareCardTitle}>⚡ Hardware Verification &amp; Firmware</Text>
+            <Text style={styles.hardwareCardTitle}>⚡ Switch Firmware Verification</Text>
             {station.RouteStationStatusId ? (
               <View style={styles.routeStatusBadge}>
                 <Text style={styles.routeStatusBadgeText}>
@@ -1126,133 +1374,15 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
             ) : null}
           </View>
           <Text style={styles.hardwareCardSub}>
-            Verify equipment serial numbers against assigned records and enter the active switch firmware version.
+            Enter the active switch firmware version running on the hardware switch.
           </Text>
-        </View>
-
-        {/* 1. Switch Serial Number */}
-        <View style={styles.hardwareInputGroup}>
-          <View style={styles.hardwareLabelRow}>
-            <Text style={styles.hardwareLabel}>
-              Switch Serial Number <Text style={styles.requiredStar}>*</Text>
-            </Text>
-            {hasAssignedSwitchSerial && (
-              <TouchableOpacity
-                style={styles.copyAssignedBtn}
-                onPress={handleUseAssignedSwitch}
-                activeOpacity={0.7}>
-                <Text style={styles.copyAssignedBtnText}>Use Assigned</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-          <TextInput
-            style={[
-              styles.hardwareInput,
-              switchSerialMatch.status === 'match'
-                ? styles.inputBorderSuccess
-                : switchSerialMatch.status === 'mismatch'
-                  ? styles.inputBorderWarning
-                  : null,
-            ]}
-            placeholder={
-              station.SwitchSerialNumber
-                ? `Assigned: ${station.SwitchSerialNumber}`
-                : 'Enter Switch Serial No. (e.g. 2660H2515XLH)'
-            }
-            placeholderTextColor="#94A3B8"
-            value={switchSerialNumber}
-            onChangeText={handleSwitchSerialChange}
-            autoCapitalize="characters"
-            autoCorrect={false}
-          />
-          {/* Comparison Status Indicator */}
-          <View
-            style={[
-              styles.comparisonPill,
-              switchSerialMatch.status === 'match'
-                ? styles.comparisonPillMatch
-                : switchSerialMatch.status === 'mismatch'
-                  ? styles.comparisonPillMismatch
-                  : styles.comparisonPillNeutral,
-            ]}>
-            <Text
-              style={[
-                styles.comparisonPillText,
-                switchSerialMatch.status === 'match'
-                  ? styles.comparisonTextMatch
-                  : switchSerialMatch.status === 'mismatch'
-                    ? styles.comparisonTextMismatch
-                    : styles.comparisonTextNeutral,
-              ]}>
-              {switchSerialMatch.message}
-            </Text>
-          </View>
-        </View>
-
-        {/* 2. Resilient Serial Number */}
-        <View style={styles.hardwareInputGroup}>
-          <View style={styles.hardwareLabelRow}>
-            <Text style={styles.hardwareLabel}>
-              Resilient Serial Number <Text style={styles.requiredStar}>*</Text>
-            </Text>
-            {hasAssignedResilientSerial && (
-              <TouchableOpacity
-                style={styles.copyAssignedBtn}
-                onPress={handleUseAssignedResilient}
-                activeOpacity={0.7}>
-                <Text style={styles.copyAssignedBtnText}>Use Assigned</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-          <TextInput
-            style={[
-              styles.hardwareInput,
-              resilientSerialMatch.status === 'match'
-                ? styles.inputBorderSuccess
-                : resilientSerialMatch.status === 'mismatch'
-                  ? styles.inputBorderWarning
-                  : null,
-            ]}
-            placeholder={
-              station.ResilientSerialNumber
-                ? `Assigned: ${station.ResilientSerialNumber}`
-                : 'Enter Resilient Serial No. (e.g. 202607310903)'
-            }
-            placeholderTextColor="#94A3B8"
-            value={resilientSerialNumber}
-            onChangeText={handleResilientSerialChange}
-            autoCapitalize="characters"
-            autoCorrect={false}
-          />
-          {/* Comparison Status Indicator */}
-          <View
-            style={[
-              styles.comparisonPill,
-              resilientSerialMatch.status === 'match'
-                ? styles.comparisonPillMatch
-                : resilientSerialMatch.status === 'mismatch'
-                  ? styles.comparisonPillMismatch
-                  : styles.comparisonPillNeutral,
-            ]}>
-            <Text
-              style={[
-                styles.comparisonPillText,
-                resilientSerialMatch.status === 'match'
-                  ? styles.comparisonTextMatch
-                  : resilientSerialMatch.status === 'mismatch'
-                    ? styles.comparisonTextMismatch
-                    : styles.comparisonTextNeutral,
-              ]}>
-              {resilientSerialMatch.message}
-            </Text>
-          </View>
         </View>
 
         {/* 3. Switch Firmware Number */}
         <View style={styles.hardwareInputGroup}>
           <View style={styles.hardwareLabelRow}>
             <Text style={styles.hardwareLabel}>
-              Switch Firmware Version / Number <Text style={styles.requiredStar}>*</Text>
+              Switch Firmware Version / Number
             </Text>
           </View>
           <TextInput
@@ -1331,10 +1461,10 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
       <TouchableOpacity
         style={[
           styles.submitButton,
-          uploadedCount === 0 || isSubmitting ? styles.submitButtonDisabled : null,
+          isSubmitDisabled ? styles.submitButtonDisabled : null,
         ]}
         onPress={handleSubmit}
-        disabled={uploadedCount === 0 || isSubmitting}
+        disabled={isSubmitDisabled}
         activeOpacity={0.85}>
         {isSubmitting ? (
           <View style={styles.submitRow}>
@@ -1343,7 +1473,9 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
           </View>
         ) : (
           <Text style={styles.submitButtonText}>
-            📤 Submit Installation Proof ({uploadedCount}/{totalCount})
+            {isDraftStation
+              ? `📤 Submit Draft Progress (${uploadedCount}/${totalCount} Photos)`
+              : `📤 Submit Installation Proof (${uploadedCount}/${totalCount})`}
           </Text>
         )}
       </TouchableOpacity>
@@ -2153,47 +2285,182 @@ const styles = StyleSheet.create({
     borderColor: '#F59E0B',
     backgroundColor: '#FFFBEB',
   },
-  comparisonPill: {
-    marginTop: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 8,
-  },
-  comparisonPillMatch: {
-    backgroundColor: '#DCFCE7',
-    borderWidth: 1,
-    borderColor: '#86EFAC',
-  },
-  comparisonPillMismatch: {
-    backgroundColor: '#FEF3C7',
-    borderWidth: 1,
-    borderColor: '#FDE68A',
-  },
-  comparisonPillNeutral: {
-    backgroundColor: '#F1F5F9',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  comparisonPillText: {
-    fontSize: 12,
-  },
-  comparisonTextMatch: {
-    color: '#15803D',
-    fontWeight: '700',
-  },
-  comparisonTextMismatch: {
-    color: '#B45309',
-    fontWeight: '700',
-  },
-  comparisonTextNeutral: {
-    color: '#64748B',
-    fontWeight: '600',
-  },
   firmwareHelperText: {
     fontSize: 11,
     color: '#64748B',
     marginTop: 4,
     lineHeight: 15,
+  },
+  typeCardBound: {
+    backgroundColor: '#F8FAFC',
+    borderColor: '#94A3B8',
+    borderWidth: 1.5,
+  },
+  typeHeaderPillsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  statusPillBound: {
+    backgroundColor: '#EEF2FF',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#C7D2FE',
+  },
+  statusTextBound: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#4338CA',
+  },
+  statusPillAnnexure: {
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  statusTextAnnexure: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#92400E',
+  },
+  annexureNoticeBox: {
+    backgroundColor: '#FFFBEB',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginBottom: 10,
+  },
+  annexureNoticeText: {
+    fontSize: 12,
+    color: '#92400E',
+    fontWeight: '600',
+    lineHeight: 16,
+  },
+  boundSerialContainer: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  boundSerialHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  boundActionButtonsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  hardwareLabelActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  clearSerialBtn: {
+    backgroundColor: '#FEE2E2',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  clearSerialBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#DC2626',
+  },
+  boundSerialTitleWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  boundSerialIcon: {
+    fontSize: 14,
+  },
+  boundSerialTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1E293B',
+  },
+  boundPhotoSectionDivider: {
+    marginTop: 10,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9',
+  },
+  boundPhotoSectionTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#475569',
+    marginBottom: 2,
+  },
+  boundNoticePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginBottom: 12,
+    gap: 8,
+  },
+  boundNoticeIcon: {
+    fontSize: 16,
+  },
+  boundNoticeText: {
+    fontSize: 12,
+    color: '#1E40AF',
+    fontWeight: '600',
+    flex: 1,
+    lineHeight: 16,
+  },
+  draftNoticeBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFBEB',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 14,
+    gap: 10,
+  },
+  draftNoticeIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#FEF3C7',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  draftNoticeIcon: {
+    fontSize: 18,
+  },
+  draftNoticeContent: {
+    flex: 1,
+  },
+  draftNoticeTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#92400E',
+    marginBottom: 2,
+  },
+  draftNoticeText: {
+    fontSize: 11,
+    color: '#B45309',
+    lineHeight: 16,
   },
   submitButton: {
     backgroundColor: '#10B981',

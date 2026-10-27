@@ -12,11 +12,13 @@ import { InstallationPhotoGallery } from './InstallationPhotoGallery';
 
 interface CompletedStationCardProps {
   item: CompletedStationItem;
+  isWorker?: boolean;
   onPress?: () => void;
 }
 
 export const CompletedStationCard: React.FC<CompletedStationCardProps> = ({
   item,
+  isWorker = false,
   onPress,
 }) => {
   const handleCall = (phoneNumber: string) => {
@@ -168,7 +170,7 @@ export const CompletedStationCard: React.FC<CompletedStationCardProps> = ({
       ) : null}
 
       {/* Installation Photos & Files Gallery */}
-      <InstallationPhotoGallery files={item.files || []} />
+      <InstallationPhotoGallery files={item.files || []} isWorker={isWorker} />
     </View>
   );
 };

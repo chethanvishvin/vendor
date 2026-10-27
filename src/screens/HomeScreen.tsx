@@ -12,6 +12,9 @@ import {
   Alert,
   ToastAndroid,
   Platform,
+  Modal,
+  ScrollView,
+  KeyboardAvoidingView,
 } from 'react-native';
 import { apiService } from '../api/apiService';
 import {
@@ -19,11 +22,17 @@ import {
   StationItem,
   AssignmentItem,
   FetchVendorDetailResult,
+  FetchVendorDetailResponse,
   CompletedStationItem,
+  FetchCompletedStationsResponse,
   DashboardCountData,
+  WorkerPendingStationItem,
+  WorkerCompletedStationItem,
+  SingleStationWorkerDropdownItem,
 } from '../types';
 import { StationDetailScreen } from './StationDetailScreen';
 import { OfflineQueueScreen } from './OfflineQueueScreen';
+import { VendorWorkersScreen } from './VendorWorkersScreen';
 import { CompletedStationCard } from '../components/CompletedStationCard';
 import NetInfo from '@react-native-community/netinfo';
 import {
@@ -47,6 +56,16 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   isJustLoggedIn,
 }) => {
   const [selectedVendorId] = useState<number>(currentVendor.VendorId);
+  const isWorker =
+    currentVendor.RoleId === 9 ||
+    currentVendor.userType === 'VendorWorker' ||
+    Boolean(currentVendor.VendorWorkerId);
+  const activeWorkerId =
+    currentVendor.VendorWorkerId || (currentVendor as any).WorkerId || null;
+  const vendorDisplayName = isWorker
+    ? (currentVendor.UserName || 'Vendor Worker')
+    : (currentVendor.CompanyName || currentVendor.VendorName || 'Vendor');
+
   const [dataResult, setDataResult] = useState<FetchVendorDetailResult | null>(null);
   const [completedStations, setCompletedStations] = useState<CompletedStationItem[]>([]);
   const [dashboardCounts, setDashboardCounts] = useState<DashboardCountData | null>(null);
@@ -55,8 +74,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Independent fetch for dashboard metrics counts
+  // Independent fetch for dashboard metrics counts (vendor only)
   const fetchDashboardCounts = async (vendorId: number) => {
+    if (isWorker) return;
     try {
       const res = await apiService.fetchDashboardCount(vendorId, 2);
       if (res && res.status && res.data) {
@@ -91,6 +111,95 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   // Offline queue state
   const [showOfflineQueue, setShowOfflineQueue] = useState<boolean>(false);
   const [offlineQueueCount, setOfflineQueueCount] = useState<number>(0);
+  const [showWorkersScreen, setShowWorkersScreen] = useState<boolean>(false);
+  const [workersInitialTab, setWorkersInitialTab] = useState<'list' | 'assign' | 'assigned' | 'create'>('list');
+
+  // Single station worker assignment state
+  const [assignModalStation, setAssignModalStation] = useState<StationItem | null>(null);
+  const [assignWorkersList, setAssignWorkersList] = useState<SingleStationWorkerDropdownItem[]>([]);
+  const [isLoadingAssignWorkers, setIsLoadingAssignWorkers] = useState<boolean>(false);
+  const [selectedAssignWorker, setSelectedAssignWorker] = useState<SingleStationWorkerDropdownItem | null>(null);
+  const [isSubmittingSingleAssign, setIsSubmittingSingleAssign] = useState<boolean>(false);
+  const [assignWorkerSearch, setAssignWorkerSearch] = useState<string>('');
+
+  const filteredAssignWorkers = useMemo(() => {
+    if (!assignWorkerSearch.trim()) return assignWorkersList;
+    const q = assignWorkerSearch.toLowerCase().trim();
+    return assignWorkersList.filter(
+      w =>
+        (w.WorkerName || '').toLowerCase().includes(q) ||
+        String(w.WorkerId).includes(q),
+    );
+  }, [assignWorkersList, assignWorkerSearch]);
+
+  const handleOpenAssignModal = async (station: StationItem) => {
+    setAssignModalStation(station);
+    setSelectedAssignWorker(null);
+    setAssignWorkerSearch('');
+    setIsLoadingAssignWorkers(true);
+    try {
+      const workers = await apiService.fetchSingleStationWorkers(currentVendor.VendorId, 2);
+      setAssignWorkersList(workers);
+      if (station.WorkerId) {
+        const existing = workers.find(w => w.WorkerId === station.WorkerId);
+        if (existing) {
+          setSelectedAssignWorker(existing);
+        }
+      }
+    } catch (err: any) {
+      Alert.alert('Worker List Error', err?.message || 'Failed to fetch workers list.');
+    } finally {
+      setIsLoadingAssignWorkers(false);
+    }
+  };
+
+  const handleConfirmSingleStationAssign = async () => {
+    if (!assignModalStation || !selectedAssignWorker) {
+      Alert.alert('Selection Required', 'Please select a worker to assign this station.');
+      return;
+    }
+
+    const vendorAssignmentId =
+      assignModalStation.VendorAssignmentId ||
+      (assignModalStation as any).vendorAssignmentId ||
+      0;
+
+    const excelDataId = assignModalStation.ExcelDataId;
+
+    const vendorName = currentVendor.VendorName || currentVendor.CompanyName || 'Vendor';
+    const contactNumber = currentVendor.ContactNumber || currentVendor.MobileNumber || '';
+    const createdBy = contactNumber ? `${vendorName} - ${contactNumber}` : vendorName;
+
+    setIsSubmittingSingleAssign(true);
+    try {
+      const res = await apiService.insertSingleStationAssignToWorker({
+        flagId: 1,
+        WorkerId: selectedAssignWorker.WorkerId,
+        VendorId: currentVendor.VendorId,
+        vendorAssignmentId,
+        ExcelDataId: excelDataId,
+        CreatedByUserName: createdBy,
+      });
+
+      Alert.alert(
+        'Assigned Successfully! 🎉',
+        res.message || `Station "${assignModalStation.Station}" has been assigned to ${selectedAssignWorker.WorkerName}.`,
+        [
+          {
+            text: 'Great',
+            onPress: () => {
+              setAssignModalStation(null);
+              fetchAllData(selectedVendorId, false);
+            },
+          },
+        ],
+      );
+    } catch (err: any) {
+      Alert.alert('Assignment Error', err?.message || 'Failed to assign station to worker.');
+    } finally {
+      setIsSubmittingSingleAssign(false);
+    }
+  };
 
   const refreshQueueCount = useCallback(async () => {
     try {
@@ -185,41 +294,215 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
       }
     }, 150);
   };
-
   const fetchAllData = async (vendorId: number, showLoading = true) => {
     if (showLoading) setIsLoading(true);
     setErrorMessage(null);
 
     try {
-      const [assignedRes, completedRes] = await Promise.allSettled([
-        apiService.fetchVendorWiseDetail(vendorId, 2),
-        apiService.fetchCompletedStations(vendorId, 2),
+      // Pending stations promise:
+      // If Worker: use fetchPendingWorkerList with { flagId: 1, WorkerId: activeWorkerId }
+      // If Vendor: use fetchVendorWiseDetail with { VendorId: vendorId, flagId: 2 }
+      const pendingPromise = activeWorkerId
+        ? apiService.fetchPendingWorkerList(activeWorkerId, 1)
+        : apiService.fetchVendorWiseDetail(vendorId, 2);
+
+      // Completed stations promise:
+      // If Worker: use fetchPendingWorkerList with { flagId: 2, WorkerId: activeWorkerId }
+      // If Vendor: use fetchCompletedStations with { VendorId: vendorId, flagId: 2 }
+      const completedPromise = activeWorkerId
+        ? apiService.fetchPendingWorkerList(activeWorkerId, 2)
+        : apiService.fetchCompletedStations(vendorId, 2);
+
+      const [pendingRes, completedRes] = await Promise.allSettled([
+        pendingPromise,
+        completedPromise,
       ]);
 
       let hasData = false;
 
-      if (assignedRes.status === 'fulfilled' && assignedRes.value?.status) {
-        setDataResult(assignedRes.value.result);
-        if (assignedRes.value.result.assignments?.length > 0) {
-          hasData = true;
+      if (pendingRes.status === 'fulfilled') {
+        if (activeWorkerId) {
+          // Process Worker Pending Stations from fetchPendingWorkerList
+          const workerStations: WorkerPendingStationItem[] = Array.isArray(pendingRes.value)
+            ? pendingRes.value
+            : [];
+          if (workerStations.length > 0) {
+            hasData = true;
+          }
 
-          // Extract all pending stations across assignments and sync to SQLite
-          const pendingList: StationItem[] = [];
-          assignedRes.value.result.assignments.forEach((assignment: AssignmentItem) => {
-            if (assignment.stations && Array.isArray(assignment.stations)) {
-              pendingList.push(...assignment.stations);
-            }
+          // Map worker pending items to StationItem format
+          const mappedStations: StationItem[] = workerStations.map(item => ({
+            VendorStationAssignmentId: item.WorkerStationAssignmentId || 0,
+            WorkerStationAssignmentId: item.WorkerStationAssignmentId || 0,
+            WorkerId: item.WorkerId || activeWorkerId || 0,
+            VendorAssignmentId: item.VendorAssignmentId || 0,
+            ExcelDataId: item.ExcelDataId,
+            VendorStatusId: item.StatusId || 1,
+            IsDisabled: item.AssignmentIsDisabled || false,
+            CreatedAt: item.AssignmentCreatedAt || '',
+            UpdatedAt: item.AssignmentUpdatedAt || null,
+            Station: item.Station || '',
+            Taluk: item.Taluk || '',
+            VoltageClass: item.VoltageClass || '',
+            InChangreAEJEname: item.InChangreAEJEname || '',
+            ContactNumber: item.StationContactNumber || '',
+            SubStationAddress: item.SubStationAddress || '',
+            PinCode: item.PinCode || '',
+            Latitude: item.Latitude || '',
+            Longitude: item.Longitude || '',
+            Zone: item.Zone || '',
+            Circle: item.Circle || '',
+            Division: item.Division || '',
+            RouteStationStatusId: 0,
+            StatusId: item.StatusId || 1,
+            VisitedAt: '',
+            StationRemarks: null,
+            StationSubmissionId: 0,
+            SubmissionRemarks: '',
+            SubmissionCreatedAt: '',
+            SubmissionUpdatedAt: null,
+            CreatedByDriverId: 0,
+            SwitchSerialNumber: item.SwitchSerialNumber || '',
+            ResilientSerialNumber: item.ResilientSerialNumber || '',
+            SwitchFirmWareNumber: item.SwitchFirmWareNumber || '',
+            PendingFileTypes: item.PendingFileTypeIds || item.PendingFileTypes || [],
+            PendingFileTypeIds: item.PendingFileTypeIds || [],
+            VendorStatusName: item.StatusId === 2 ? 'Draft' : (item.VendorStatusName || 'Pending'),
+            ...(item as any),
+          }));
+
+          // Group mapped stations into assignments by VendorAssignmentId
+          const assignmentMap = new Map<number, StationItem[]>();
+          mappedStations.forEach(st => {
+            const vId = st.VendorAssignmentId || 0;
+            if (!assignmentMap.has(vId)) assignmentMap.set(vId, []);
+            assignmentMap.get(vId)!.push(st);
           });
 
-          if (pendingList.length > 0) {
-            startBackgroundSQLiteSync(vendorId, pendingList);
+          const assignments: AssignmentItem[] = [];
+          assignmentMap.forEach((stations, vAssignmentId) => {
+            const first = stations[0];
+            assignments.push({
+              vendorAssignmentId: vAssignmentId,
+              vendorId: (first as any).VendorId || vendorId,
+              zone: first.Zone || '',
+              circle: first.Circle || '',
+              division: first.Division || '',
+              vendorStatusId: 1,
+              assignedAt: first.CreatedAt || new Date().toISOString(),
+              stationCount: stations.length,
+              completedStationCount: 0,
+              pendingStationCount: stations.length,
+              stations,
+            });
+          });
+
+          const firstRaw = workerStations[0];
+          setDataResult({
+            vendor: {
+              VendorId: firstRaw?.VendorId || currentVendor.VendorId || vendorId,
+              VendorName: firstRaw?.VendorName || currentVendor.VendorName || '',
+              CompanyName: firstRaw?.CompanyName || currentVendor.CompanyName || '',
+              ContactPerson: firstRaw?.VendorContactPerson || currentVendor.ContactPerson || '',
+              ContactNumber: firstRaw?.VendorContactNumber || currentVendor.ContactNumber || '',
+              EmailAddress: firstRaw?.VendorEmailAddress || currentVendor.EmailAddress || '',
+            },
+            assignments,
+          });
+
+          if (mappedStations.length > 0) {
+            startBackgroundSQLiteSync(vendorId, mappedStations);
+          }
+        } else {
+          // Process Vendor Wise Detail from apkFetchVendorWiseDetail
+          const vendorRes = pendingRes.value as FetchVendorDetailResponse;
+          if (vendorRes?.status && vendorRes.result) {
+            setDataResult(vendorRes.result);
+            if (vendorRes.result.assignments?.length > 0) {
+              hasData = true;
+
+              // Extract all pending stations across assignments and sync to SQLite
+              const pendingList: StationItem[] = [];
+              vendorRes.result.assignments.forEach((assignment: AssignmentItem) => {
+                if (assignment.stations && Array.isArray(assignment.stations)) {
+                  pendingList.push(...assignment.stations);
+                }
+              });
+
+              if (pendingList.length > 0) {
+                startBackgroundSQLiteSync(vendorId, pendingList);
+              }
+            }
           }
         }
       }
 
       let fetchedCompleted: CompletedStationItem[] = [];
-      if (completedRes.status === 'fulfilled' && completedRes.value?.status) {
-        fetchedCompleted = completedRes.value.data || [];
+      if (completedRes.status === 'fulfilled') {
+        if (activeWorkerId) {
+          // Process Worker Completed Stations from fetchPendingWorkerList (flagId: 2)
+          const rawItems: any[] = Array.isArray(completedRes.value) ? completedRes.value : [];
+          fetchedCompleted = rawItems.map(item => ({
+            VendorStationAssignmentId: item.WorkerStationAssignmentId || item.VendorStationAssignmentId || 0,
+            VendorAssignmentId: item.VendorAssignmentId || 0,
+            ExcelDataId: item.ExcelDataId,
+            VendorStatusId: item.StatusId || 3,
+            StatusId: item.StatusId || 3,
+            CreatedAt: item.AssignmentCreatedAt || item.CreatedAt || '',
+            UpdatedAt: item.AssignmentUpdatedAt || item.UpdatedAt || null,
+            VendorId: item.VendorId || vendorId,
+            Zone: item.Zone || '',
+            Circle: item.Circle || '',
+            Division: item.Division || '',
+            AssignedAt: item.AssignmentCreatedAt || item.CreatedAt || '',
+            VendorName: item.VendorName || '',
+            CompanyName: item.CompanyName || '',
+            ContactPerson: item.VendorContactPerson || item.ContactPerson || '',
+            VendorContactNumber: item.VendorContactNumber || '',
+            VendorEmailAddress: item.VendorEmailAddress || '',
+            Station: item.Station || '',
+            Taluk: item.Taluk || '',
+            VoltageClass: item.VoltageClass || '',
+            InChangreAEJEname: item.InChangreAEJEname || '',
+            StationContactNumber: item.StationContactNumber || '',
+            SubStationAddress: item.SubStationAddress || '',
+            PinCode: item.PinCode || '',
+            Latitude: item.Latitude || '',
+            Longitude: item.Longitude || '',
+            RouteStationStatusId: 0,
+            VisitedAt: item.InstallationCreatedAt || item.AssignmentUpdatedAt || null,
+            StationRemarks: item.InstallationRemarks || null,
+            StationSubmissionId: item.InstallationSubmissionId || null,
+            SubmissionRemarks: item.InstallationRemarks || '',
+            SubmissionCreatedAt: item.InstallationCreatedAt || null,
+            SubmissionUpdatedAt: item.InstallationUpdatedAt || null,
+            CreatedByDriverId: null,
+            SwitchSerialNumber: item.SwitchSerialNumber || null,
+            ResilientSerialNumber: item.ResilientSerialNumber || null,
+            SwitchFirmWareNumber: item.SwitchFirmWareNumber || null,
+            InstallationSubmissionId: item.InstallationSubmissionId || null,
+            InstallationStatusId: item.InstallationStatusId || 3,
+            InstallationCreatedAt: item.InstallationCreatedAt || null,
+            InstallationUpdatedAt: item.InstallationUpdatedAt || null,
+            InstallationCreatedByUserName:
+              item.InstallationCreatedByUserName ||
+              item.UpdatedByUserName ||
+              item.WorkerName ||
+              null,
+            InstallationUpdatedByUserName:
+              item.InstallationUpdatedByUserName || item.UpdatedByUserName || null,
+            InstallationRemarks: item.InstallationRemarks || null,
+            InstallationVendorId: item.InstallationVendorId || item.VendorId || null,
+            files: item.files || [],
+            ...item,
+          }));
+        } else {
+          // Process Vendor Completed Stations from fetchCompletedStations
+          const vendorCompletedRes = completedRes.value as FetchCompletedStationsResponse;
+          if (vendorCompletedRes?.status) {
+            fetchedCompleted = vendorCompletedRes.data || [];
+          }
+        }
         setCompletedStations(fetchedCompleted);
         if (fetchedCompleted.length > 0) {
           hasData = true;
@@ -228,12 +511,10 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
 
       // If this vendor has completed stations but 0 assigned stations, auto-switch to completed tab
       const assignedCount =
-        assignedRes.status === 'fulfilled' && assignedRes.value?.result?.assignments
-          ? assignedRes.value.result.assignments.reduce(
-            (acc, a) => acc + (a.stations?.length || 0),
-            0,
-          )
-          : 0;
+        dataResult?.assignments?.reduce(
+          (acc, a) => acc + (a.stations?.length || 0),
+          0,
+        ) || 0;
 
       if (assignedCount === 0 && fetchedCompleted.length > 0) {
         setActiveTab('completed');
@@ -241,7 +522,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
 
       if (
         !hasData &&
-        assignedRes.status === 'rejected' &&
+        pendingRes.status === 'rejected' &&
         completedRes.status === 'rejected'
       ) {
         // Fallback: load pending stations from local SQLite database
@@ -273,7 +554,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         }
       }
     } catch (err: any) {
-      setErrorMessage(err.message || 'Failed to fetch vendor assignments from RNA service.');
+      setErrorMessage(err.message || 'Failed to fetch assignments from RNA service.');
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
@@ -433,18 +714,37 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
       {/* Top App Bar */}
       <View style={styles.topBar}>
         <View style={styles.vendorIdentity}>
-          <View style={styles.avatarPill}>
+          <View style={[styles.avatarPill, isWorker && styles.avatarPillWorker]}>
             <Text style={styles.avatarText}>
-              {(currentVendor.CompanyName || 'VP').substring(0, 2).toUpperCase()}
+              {isWorker
+                ? (currentVendor.UserName || 'WK').substring(0, 2).toUpperCase()
+                : (currentVendor.VendorName || currentVendor.CompanyName || 'VP').substring(0, 2).toUpperCase()}
             </Text>
           </View>
           <View style={styles.vendorTextWrap}>
-            <Text style={styles.vendorCompany} numberOfLines={1}>
-              {currentVendor.CompanyName}
-            </Text>
+            <View style={styles.vendorTitleRow}>
+              <Text style={styles.vendorCompany} numberOfLines={1}>
+                {vendorDisplayName}
+              </Text>
+              <View
+                style={[
+                  styles.roleBadgePill,
+                  isWorker ? styles.roleBadgeWorker : styles.roleBadgeVendor,
+                ]}>
+                <Text
+                  style={[
+                    styles.roleBadgeText,
+                    isWorker ? styles.roleTextWorker : styles.roleTextVendor,
+                  ]}>
+                  {isWorker ? '👷 WORKER' : '🏢 VENDOR'}
+                </Text>
+              </View>
+            </View>
             <View style={styles.topStatusRow}>
               <Text style={styles.vendorUser} numberOfLines={1}>
-                👤 {currentVendor.VendorName} • {currentVendor.ContactNumber}
+                {isWorker
+                  ? `👷 ${currentVendor.UserName || 'Worker'} • ${currentVendor.MobileNumber || currentVendor.ContactNumber} (ID #${currentVendor.VendorWorkerId || currentVendor.VendorId})`
+                  : `👤 ${currentVendor.VendorName || currentVendor.ContactPerson || 'Vendor'} • ${currentVendor.ContactNumber} (ID #${currentVendor.VendorId})`}
               </Text>
             </View>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
@@ -482,6 +782,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                   <Text style={styles.queuePillTopText}>📦 Queue ({offlineQueueCount})</Text>
                 </TouchableOpacity>
               )}
+
             </View>
           </View>
         </View>
@@ -493,6 +794,47 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           <Text style={styles.logoutBtnText}>Logout</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Field Worker Management Card (Vendor Only - Dedicated, Highly Visible Section) */}
+      {!isWorker && (
+        <View style={styles.workerMgmtCard}>
+          <View style={styles.workerMgmtLeft}>
+            <View style={styles.workerMgmtIconBox}>
+              <Text style={styles.workerMgmtIcon}>👥</Text>
+            </View>
+            <View style={styles.workerMgmtInfo}>
+              <Text style={styles.workerMgmtTitle}>Field Worker Management</Text>
+              <Text style={styles.workerMgmtDesc}>
+                Assign substations, manage field team, view assignments & reset passwords
+              </Text>
+            </View>
+          </View>
+          <View style={styles.workerMgmtActionsGroup}>
+            <TouchableOpacity
+              style={styles.workerMgmtAction}
+              onPress={() => {
+                setWorkersInitialTab('list');
+                setShowWorkersScreen(true);
+              }}
+              activeOpacity={0.8}>
+              <View style={styles.workerMgmtBadge}>
+                <Text style={styles.workerMgmtBadgeText}>TEAM</Text>
+              </View>
+              <Text style={styles.workerMgmtActionText}>Directory</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.workerMgmtActionAssigned}
+              onPress={() => {
+                setWorkersInitialTab('assigned');
+                setShowWorkersScreen(true);
+              }}
+              activeOpacity={0.8}>
+              <Text style={styles.workerMgmtActionAssignedText}>📋 Assigned →</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
 
       {/* Territory & Jurisdiction Card */}
       {jurisdiction.hasData ? (
@@ -611,12 +953,12 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         </View>
       </View>
 
-      {/* Metric Counters Banner - Independent apkfetchDashboardCount API */}
+      {/* Metric Counters Banner */}
       <View style={styles.metricsRow}>
         <View style={[styles.metricCard, styles.metricCardBlue]}>
           <Text style={styles.metricLabel}>Total</Text>
           <Text style={styles.metricNumber}>
-            {dashboardCounts?.TotalAssignedStationCount ?? '-'}
+            {dashboardCounts?.TotalAssignedStationCount ?? (isWorker ? stats.total : '-')}
           </Text>
           <Text style={styles.metricSub}>Substations</Text>
         </View>
@@ -627,11 +969,13 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             <Text style={styles.metricPercentBadge}>
               {dashboardCounts?.CompletedInstallationPercentage
                 ? `${dashboardCounts.CompletedInstallationPercentage}%`
-                : '0%'}
+                : stats.total > 0
+                  ? `${Math.round((stats.completed / stats.total) * 100)}%`
+                  : '0%'}
             </Text>
           </View>
           <Text style={styles.metricNumber}>
-            {dashboardCounts?.CompletedInstallationCount ?? '-'}
+            {dashboardCounts?.CompletedInstallationCount ?? (isWorker ? stats.completed : '-')}
           </Text>
           <View style={styles.progressBarTrack}>
             <View
@@ -643,7 +987,10 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                     Math.max(
                       0,
                       parseFloat(
-                        dashboardCounts?.CompletedInstallationPercentage || '0',
+                        dashboardCounts?.CompletedInstallationPercentage ||
+                          (stats.total > 0
+                            ? String(Math.round((stats.completed / stats.total) * 100))
+                            : '0'),
                       ),
                     ),
                   )}%`,
@@ -656,7 +1003,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         <View style={[styles.metricCard, styles.metricCardAmber]}>
           <Text style={styles.metricLabel}>Pending</Text>
           <Text style={styles.metricNumber}>
-            {dashboardCounts?.PendingInstallationCount ?? '-'}
+            {dashboardCounts?.PendingInstallationCount ?? (isWorker ? stats.pending : '-')}
           </Text>
           <Text style={styles.metricSub}>In-Progress</Text>
         </View>
@@ -764,6 +1111,31 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   );
 
   const renderStationCard = ({ item }: { item: StationItem }) => {
+    const isDraft =
+      item.StatusId === 2 ||
+      item.VendorStatusId === 2 ||
+      (item as any).InstallationSubmissionStatusId === 2 ||
+      item.VendorStatusName === 'Draft' ||
+      (item as any).InstallationSubmissionStatusName === 'Draft' ||
+      Boolean(
+        (item.PendingFileTypes && item.PendingFileTypes.length > 0) ||
+        ((item as any).PendingFileTypeIds && (item as any).PendingFileTypeIds.length > 0),
+      );
+
+    const pendingCount =
+      item.PendingFileTypes?.length ??
+      (item as any).PendingFileTypeIds?.length ??
+      0;
+
+    const isAssignedToWorker = Boolean(
+      item.WorkerId != null &&
+      item.WorkerName &&
+      typeof item.WorkerName === 'string' &&
+      item.WorkerName.trim() !== '' &&
+      item.WorkerName.toLowerCase() !== 'null' &&
+      item.WorkerName.toLowerCase() !== 'undefined'
+    );
+
     return (
       <TouchableOpacity
         style={styles.stationCard}
@@ -794,6 +1166,18 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               {item.Station}
             </Text>
           </View>
+
+          {isDraft ? (
+            <View style={styles.cardDraftBadge}>
+              <Text style={styles.cardDraftBadgeText}>
+                📝 Draft {pendingCount > 0 ? `(${pendingCount} Left)` : ''}
+              </Text>
+            </View>
+          ) : (
+            <View style={styles.cardPendingBadge}>
+              <Text style={styles.cardPendingBadgeText}>⏳ Pending</Text>
+            </View>
+          )}
         </View>
 
         {/* Jurisdiction Meta: Zone, Circle, Division */}
@@ -830,9 +1214,37 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           </View>
         </View>
 
+        {/* Worker Assignment Status (when assigned to worker) */}
+        {!isWorker && isAssignedToWorker && (
+          <View style={styles.assignedWorkerCardRow}>
+            <View style={styles.assignedWorkerBadge}>
+              <Text style={styles.assignedWorkerIcon}>👷</Text>
+              <Text style={styles.assignedWorkerLabel}>Assigned to Worker:</Text>
+              <Text style={styles.assignedWorkerName} numberOfLines={1}>
+                {item.WorkerName}
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {/* Small "Assign to Worker" Button (Vendor Only, ONLY on pure Pending, NOT on Draft, and NOT when already assigned) */}
+        {!isWorker && !isDraft && !isAssignedToWorker && (
+          <View style={styles.cardAssignActionRow}>
+            <TouchableOpacity
+              style={styles.cardAssignSmallBtn}
+              activeOpacity={0.8}
+              onPress={() => handleOpenAssignModal(item)}>
+              <Text style={styles.cardAssignSmallBtnIcon}>👤</Text>
+              <Text style={styles.cardAssignSmallBtnText}>Assign to Worker</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         <View style={styles.viewGuidanceRow}>
-          <Text style={styles.viewGuidanceText}>
-            📷 Upload Proof & View Station Specs ➔
+          <Text style={[styles.viewGuidanceText, isDraft && styles.viewGuidanceTextDraft]}>
+            {isDraft
+              ? `📝 Resume Upload (${pendingCount > 0 ? `${pendingCount} photos remaining` : 'Draft'}) ➔`
+              : '📷 Upload Proof & View Station Specs ➔'}
           </Text>
         </View>
       </TouchableOpacity>
@@ -843,6 +1255,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     return (
       <CompletedStationCard
         item={item}
+        isWorker={isWorker}
         onPress={() => {
           setSelectedStation(item);
         }}
@@ -868,6 +1281,16 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           fetchAllData(selectedVendorId, false);
           fetchDashboardCounts(selectedVendorId);
         }}
+      />
+    );
+  }
+
+  if (showWorkersScreen) {
+    return (
+      <VendorWorkersScreen
+        currentVendor={currentVendor}
+        initialTab={workersInitialTab}
+        onBack={() => setShowWorkersScreen(false)}
       />
     );
   }
@@ -1003,13 +1426,206 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                 {searchQuery
                   ? 'No stations match your current search or voltage filter.'
                   : activeTab === 'completed'
-                    ? `No verified completed installations on record for ${currentVendor.CompanyName}.`
-                    : `All stations are currently completed or none are pending installation for ${currentVendor.CompanyName}.`}
+                    ? `No verified completed installations on record for ${vendorDisplayName}.`
+                    : `All stations are currently completed or none are pending installation for ${vendorDisplayName}.`}
               </Text>
             </View>
           }
         />
       )}
+
+      {/* Single Station Worker Assignment Modal */}
+      <Modal
+        visible={!!assignModalStation}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => {
+          if (!isSubmittingSingleAssign) setAssignModalStation(null);
+        }}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.assignModalOverlay}>
+          <View style={styles.assignModalContainer}>
+            {/* Modal Header */}
+            <View style={styles.assignModalHeader}>
+              <View style={styles.assignModalHeaderTitleWrap}>
+                <View style={styles.assignModalIconWrap}>
+                  <Text style={styles.assignModalIcon}>👤</Text>
+                </View>
+                <View style={styles.assignModalTitleTextWrap}>
+                  <Text style={styles.assignModalTitle}>Assign Station to Worker</Text>
+                  <Text style={styles.assignModalSubtitle} numberOfLines={1}>
+                    {assignModalStation?.Station} ({assignModalStation?.VoltageClass} kV)
+                  </Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                style={styles.assignModalCloseBtn}
+                onPress={() => {
+                  if (!isSubmittingSingleAssign) setAssignModalStation(null);
+                }}
+                disabled={isSubmittingSingleAssign}>
+                <Text style={styles.assignModalCloseText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Station Summary Strip */}
+            {assignModalStation && (
+              <View style={styles.assignStationSummaryCard}>
+                <View style={styles.assignStationInfoRow}>
+                  <Text style={styles.assignStationInfoLabel}>📍 Substation:</Text>
+                  <Text style={styles.assignStationInfoVal} numberOfLines={1}>
+                    {assignModalStation.Station} ({assignModalStation.Taluk})
+                  </Text>
+                </View>
+                <View style={styles.assignStationInfoRow}>
+                  <Text style={styles.assignStationInfoLabel}>🏷️ Assignment ID:</Text>
+                  <Text style={styles.assignStationInfoVal}>
+                    #{assignModalStation.VendorAssignmentId} • Excel #{assignModalStation.ExcelDataId}
+                  </Text>
+                </View>
+                {assignModalStation.WorkerName ? (
+                  <View style={styles.assignStationInfoRow}>
+                    <Text style={styles.assignStationInfoLabel}>👷 Currently Assigned:</Text>
+                    <Text style={styles.assignStationInfoValHighlighted}>
+                      {assignModalStation.WorkerName}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
+            )}
+
+            {/* Worker Search Bar */}
+            <View style={styles.assignWorkerSearchBox}>
+              <Text style={styles.assignWorkerSearchIcon}>🔍</Text>
+              <TextInput
+                style={styles.assignWorkerSearchInput}
+                placeholder="Search worker by name or mobile..."
+                placeholderTextColor="#94A3B8"
+                value={assignWorkerSearch}
+                onChangeText={setAssignWorkerSearch}
+                clearButtonMode="while-editing"
+              />
+              {assignWorkerSearch.length > 0 && (
+                <TouchableOpacity onPress={() => setAssignWorkerSearch('')}>
+                  <Text style={styles.assignWorkerSearchClear}>✕</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {/* Worker Selection List */}
+            <View style={styles.assignWorkerListContainer}>
+              <Text style={styles.assignWorkerListHeading}>
+                Select Field Worker ({filteredAssignWorkers.length})
+              </Text>
+
+              {isLoadingAssignWorkers ? (
+                <View style={styles.assignWorkerLoadingBox}>
+                  <ActivityIndicator size="small" color="#2563EB" />
+                  <Text style={styles.assignWorkerLoadingText}>
+                    Loading workers from server...
+                  </Text>
+                </View>
+              ) : filteredAssignWorkers.length === 0 ? (
+                <View style={styles.assignWorkerEmptyBox}>
+                  <Text style={styles.assignWorkerEmptyEmoji}>👥</Text>
+                  <Text style={styles.assignWorkerEmptyTitle}>No Workers Found</Text>
+                  <Text style={styles.assignWorkerEmptySub}>
+                    {assignWorkerSearch
+                      ? 'No field worker matches your search.'
+                      : 'No workers found for your vendor account. Add workers via Field Worker Management first.'}
+                  </Text>
+                </View>
+              ) : (
+                <ScrollView
+                  style={styles.assignWorkerScrollView}
+                  showsVerticalScrollIndicator={true}
+                  keyboardShouldPersistTaps="handled">
+                  {filteredAssignWorkers.map(worker => {
+                    const isSelected = selectedAssignWorker?.WorkerId === worker.WorkerId;
+                    return (
+                      <TouchableOpacity
+                        key={worker.WorkerId}
+                        style={[
+                          styles.assignWorkerCard,
+                          isSelected && styles.assignWorkerCardSelected,
+                        ]}
+                        activeOpacity={0.7}
+                        onPress={() => setSelectedAssignWorker(worker)}>
+                        <View style={styles.assignWorkerCardLeft}>
+                          <View
+                            style={[
+                              styles.assignWorkerAvatar,
+                              isSelected && styles.assignWorkerAvatarSelected,
+                            ]}>
+                            <Text style={styles.assignWorkerAvatarText}>👷</Text>
+                          </View>
+                          <View style={styles.assignWorkerDetails}>
+                            <Text
+                              style={[
+                                styles.assignWorkerName,
+                                isSelected && styles.assignWorkerNameSelected,
+                              ]}
+                              numberOfLines={1}>
+                              {worker.WorkerName}
+                            </Text>
+                            <Text style={styles.assignWorkerIdText}>
+                              Worker ID #{worker.WorkerId}
+                            </Text>
+                          </View>
+                        </View>
+                        <View
+                          style={[
+                            styles.assignRadioCircle,
+                            isSelected && styles.assignRadioCircleSelected,
+                          ]}>
+                          {isSelected && <View style={styles.assignRadioDot} />}
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              )}
+            </View>
+
+            {/* Footer Buttons */}
+            <View style={styles.assignModalFooter}>
+              <TouchableOpacity
+                style={styles.assignModalCancelBtn}
+                onPress={() => {
+                  if (!isSubmittingSingleAssign) setAssignModalStation(null);
+                }}
+                disabled={isSubmittingSingleAssign}
+                activeOpacity={0.7}>
+                <Text style={styles.assignModalCancelBtnText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.assignModalConfirmBtn,
+                  (!selectedAssignWorker || isSubmittingSingleAssign) &&
+                    styles.assignModalConfirmBtnDisabled,
+                ]}
+                onPress={handleConfirmSingleStationAssign}
+                disabled={!selectedAssignWorker || isSubmittingSingleAssign}
+                activeOpacity={0.85}>
+                {isSubmittingSingleAssign ? (
+                  <View style={styles.assignModalBtnLoadingRow}>
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                    <Text style={styles.assignModalConfirmBtnText}>Assigning...</Text>
+                  </View>
+                ) : (
+                  <Text style={styles.assignModalConfirmBtnText}>
+                    {selectedAssignWorker
+                      ? `Assign to ${selectedAssignWorker.WorkerName.split('-')[0].trim()}`
+                      : 'Select a Worker'}
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
   );
 };
@@ -1054,6 +1670,10 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 2,
   },
+  avatarPillWorker: {
+    backgroundColor: '#0D9488',
+    shadowColor: '#0D9488',
+  },
   avatarText: {
     color: '#FFFFFF',
     fontWeight: '800',
@@ -1062,10 +1682,41 @@ const styles = StyleSheet.create({
   vendorTextWrap: {
     flex: 1,
   },
+  vendorTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  roleBadgePill: {
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  roleBadgeVendor: {
+    backgroundColor: '#EFF6FF',
+    borderColor: '#BFDBFE',
+  },
+  roleBadgeWorker: {
+    backgroundColor: '#F0FDFA',
+    borderColor: '#99F6E4',
+  },
+  roleBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  roleTextVendor: {
+    color: '#1D4ED8',
+  },
+  roleTextWorker: {
+    color: '#0F766E',
+  },
   vendorCompany: {
     color: '#0F172A',
     fontSize: 16,
     fontWeight: '700',
+    maxWidth: '70%',
   },
   vendorUser: {
     color: '#64748B',
@@ -1800,5 +2451,480 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
     color: '#B45309',
+  },
+  workerMgmtCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: '#CCFBF1',
+    shadowColor: '#0F766E',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  workerMgmtLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    marginRight: 10,
+  },
+  workerMgmtIconBox: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: '#F0FDFA',
+    borderWidth: 1,
+    borderColor: '#99F6E4',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  workerMgmtIcon: {
+    fontSize: 22,
+  },
+  workerMgmtInfo: {
+    flex: 1,
+  },
+  workerMgmtTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0F172A',
+    marginBottom: 2,
+  },
+  workerMgmtBadge: {
+    backgroundColor: '#CCFBF1',
+    paddingHorizontal: 5,
+    paddingVertical: 1.5,
+    borderRadius: 4,
+    marginRight: 2,
+  },
+  workerMgmtBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#0F766E',
+    letterSpacing: 0.5,
+  },
+  workerMgmtDesc: {
+    fontSize: 11,
+    color: '#64748B',
+    lineHeight: 15,
+  },
+  workerMgmtActionsGroup: {
+    flexDirection: 'column',
+    gap: 6,
+    alignItems: 'stretch',
+  },
+  workerMgmtAction: {
+    backgroundColor: '#0D9488',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    shadowColor: '#0D9488',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  workerMgmtActionText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  workerMgmtActionAssigned: {
+    backgroundColor: '#EEF2FF',
+    borderWidth: 1,
+    borderColor: '#C7D2FE',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  workerMgmtActionAssignedText: {
+    color: '#4338CA',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  cardDraftBadge: {
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  cardDraftBadgeText: {
+    color: '#B45309',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  cardPendingBadge: {
+    backgroundColor: '#F1F5F9',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  cardPendingBadgeText: {
+    color: '#64748B',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  viewGuidanceTextDraft: {
+    color: '#D97706',
+    fontWeight: '700',
+  },
+  cardAssignActionRow: {
+    marginTop: 8,
+    marginBottom: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  cardAssignSmallBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1.2,
+    borderColor: '#3B82F6',
+    borderRadius: 7,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    alignSelf: 'flex-start',
+    gap: 5,
+  },
+  cardAssignSmallBtnIcon: {
+    fontSize: 12,
+  },
+  cardAssignSmallBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#1D4ED8',
+  },
+  assignedWorkerCardRow: {
+    marginTop: 8,
+    marginBottom: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  assignedWorkerBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F0FDF4',
+    borderWidth: 1,
+    borderColor: '#86EFAC',
+    borderRadius: 7,
+    paddingVertical: 4,
+    paddingHorizontal: 9,
+    alignSelf: 'flex-start',
+    gap: 6,
+  },
+  assignedWorkerIcon: {
+    fontSize: 13,
+  },
+  assignedWorkerLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#15803D',
+  },
+  assignedWorkerName: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#166534',
+  },
+  assignModalOverlay: {
+    flex: 1,
+    backgroundColor: '#0F172ACC',
+    justifyContent: 'flex-end',
+  },
+  assignModalContainer: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: 18,
+    paddingTop: 16,
+    paddingBottom: Platform.OS === 'ios' ? 34 : 20,
+    maxHeight: '85%',
+  },
+  assignModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+  },
+  assignModalHeaderTitleWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  assignModalIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#EFF6FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  assignModalIcon: {
+    fontSize: 18,
+  },
+  assignModalTitleTextWrap: {
+    flex: 1,
+  },
+  assignModalTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  assignModalSubtitle: {
+    fontSize: 12,
+    color: '#64748B',
+    fontWeight: '600',
+    marginTop: 1,
+  },
+  assignModalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  assignModalCloseText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#64748B',
+  },
+  assignStationSummaryCard: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 10,
+    padding: 10,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    gap: 4,
+  },
+  assignStationInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  assignStationInfoLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748B',
+  },
+  assignStationInfoVal: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#1E293B',
+    flex: 1,
+  },
+  assignStationInfoValHighlighted: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#2563EB',
+    flex: 1,
+  },
+  assignWorkerSearchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F1F5F9',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    height: 42,
+  },
+  assignWorkerSearchIcon: {
+    fontSize: 14,
+    marginRight: 6,
+  },
+  assignWorkerSearchInput: {
+    flex: 1,
+    fontSize: 13,
+    color: '#0F172A',
+    fontWeight: '600',
+    paddingVertical: 0,
+  },
+  assignWorkerSearchClear: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#64748B',
+    padding: 4,
+  },
+  assignWorkerListContainer: {
+    marginTop: 12,
+    flexShrink: 1,
+  },
+  assignWorkerListHeading: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#334155',
+    marginBottom: 8,
+  },
+  assignWorkerLoadingBox: {
+    paddingVertical: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  assignWorkerLoadingText: {
+    fontSize: 12,
+    color: '#64748B',
+    fontWeight: '600',
+  },
+  assignWorkerEmptyBox: {
+    paddingVertical: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  assignWorkerEmptyEmoji: {
+    fontSize: 28,
+  },
+  assignWorkerEmptyTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#334155',
+  },
+  assignWorkerEmptySub: {
+    fontSize: 11,
+    color: '#64748B',
+    textAlign: 'center',
+    paddingHorizontal: 16,
+    lineHeight: 16,
+  },
+  assignWorkerScrollView: {
+    maxHeight: 220,
+  },
+  assignWorkerCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 8,
+  },
+  assignWorkerCardSelected: {
+    borderColor: '#2563EB',
+    backgroundColor: '#EFF6FF',
+  },
+  assignWorkerCardLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  assignWorkerAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  assignWorkerAvatarSelected: {
+    backgroundColor: '#DBEAFE',
+  },
+  assignWorkerAvatarText: {
+    fontSize: 18,
+  },
+  assignWorkerDetails: {
+    flex: 1,
+  },
+  assignWorkerName: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1E293B',
+  },
+  assignWorkerNameSelected: {
+    color: '#1D4ED8',
+    fontWeight: '800',
+  },
+  assignWorkerIdText: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 1,
+  },
+  assignRadioCircle: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: '#94A3B8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  assignRadioCircleSelected: {
+    borderColor: '#2563EB',
+  },
+  assignRadioDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#2563EB',
+  },
+  assignModalFooter: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 14,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#E2E8F0',
+  },
+  assignModalCancelBtn: {
+    flex: 1,
+    backgroundColor: '#F1F5F9',
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  assignModalCancelBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#475569',
+  },
+  assignModalConfirmBtn: {
+    flex: 2,
+    backgroundColor: '#2563EB',
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  assignModalConfirmBtnDisabled: {
+    backgroundColor: '#94A3B8',
+    opacity: 0.7,
+  },
+  assignModalConfirmBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  assignModalBtnLoadingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
 });

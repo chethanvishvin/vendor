@@ -21,8 +21,8 @@ interface LoginScreenProps {
 }
 
 export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
-  const [contactNumber, setContactNumber] = useState('9999999999');
-  const [password, setPassword] = useState('Admin@123');
+  const [contactNumber, setContactNumber] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -43,10 +43,22 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
     };
   }, []);
 
+  const handleContactNumberChange = (text: string) => {
+    // Restrict input strictly to digits and limit to 10 characters
+    const digitsOnly = text.replace(/[^0-9]/g, '').slice(0, 10);
+    setContactNumber(digitsOnly);
+    if (errorMessage) setErrorMessage(null);
+  };
+
   const handleLogin = async () => {
     Keyboard.dismiss();
-    if (!contactNumber.trim()) {
-      setErrorMessage('Please enter your registered contact number.');
+    const cleanedNumber = contactNumber.replace(/[^0-9]/g, '');
+    if (!cleanedNumber) {
+      setErrorMessage('Please enter your 10-digit registered mobile number.');
+      return;
+    }
+    if (cleanedNumber.length !== 10) {
+      setErrorMessage('Mobile number must be exactly 10 digits.');
       return;
     }
     if (!password.trim()) {
@@ -59,12 +71,60 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
 
     try {
       const response = await apiService.login({
-        contactNumber: contactNumber.trim(),
+        contactNumber: cleanedNumber,
         password: password.trim(),
       });
 
       if (response && response.status && response.data) {
-        onLoginSuccess(response.data);
+        const isWorker =
+          response.userType === 'VendorWorker' ||
+          Boolean(response.data.VendorWorkerId) ||
+          response.data.RoleId === 9;
+        const isVendor =
+          response.userType === 'Vendor' ||
+          response.data.RoleId === 8 ||
+          (!isWorker && Boolean(response.data.VendorId));
+
+        const roleId = response.data.RoleId
+          ? Number(response.data.RoleId)
+          : isWorker
+            ? 9
+            : 8;
+        const workerId = response.data.VendorWorkerId || (response.data as any).WorkerId;
+
+        // 1. Role Authorization check
+        if (!isVendor && !isWorker) {
+          setErrorMessage(
+            `Access Denied: Unrecognized User Type or Role. Only registered Vendors and Vendor Workers can sign in.`,
+          );
+          return;
+        }
+
+        // 2. Normalize user profile for app-wide compatibility
+        const normalizedProfile: VendorProfile = {
+          ...response.data,
+          RoleId: roleId,
+          VendorWorkerId: workerId,
+          WorkerId: workerId,
+          userType: isWorker ? 'VendorWorker' : 'Vendor',
+          VendorName:
+            (isWorker
+              ? response.data.UserName
+              : response.data.VendorName || response.data.CompanyName) || 'Vendor User',
+          CompanyName:
+            response.data.CompanyName ||
+            (isWorker ? 'Field Operations' : response.data.VendorName || 'Vendor Company'),
+          ContactNumber:
+            response.data.ContactNumber || response.data.MobileNumber || contactNumber.trim(),
+          ContactPerson:
+            response.data.ContactPerson || response.data.UserName || response.data.VendorName || (isWorker ? 'Worker' : 'Vendor'),
+          CreatedByUserName:
+            (isWorker ? response.data.UserName : response.data.VendorName) ||
+            response.data.CreatedByUserName ||
+            (isWorker ? 'Vendor Worker' : 'Vendor'),
+        };
+
+        onLoginSuccess(normalizedProfile);
       } else {
         setErrorMessage(response.message || 'Authentication failed. Please verify credentials.');
       }
@@ -124,9 +184,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
         {/* Login Card */}
         <View style={styles.card}>
           <View style={styles.cardHeader}>
-            <Text style={styles.cardTitle}>Vendor Authentication</Text>
+            <Text style={styles.cardTitle}>Sign In</Text>
             <Text style={styles.cardDesc}>
-              Enter your credentials to access assigned substations & equipment telemetry.
+              Enter your registered mobile number and password to access assigned substations.
             </Text>
           </View>
 
@@ -148,11 +208,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
               <TextInput
                 style={styles.textInput}
                 value={contactNumber}
-                onChangeText={setContactNumber}
+                onChangeText={handleContactNumberChange}
                 onFocus={() => scrollToInput(false)}
-                placeholder="Enter 10-digit number"
+                placeholder="Enter 10-digit mobile number"
                 placeholderTextColor="#64748B"
-                keyboardType="phone-pad"
+                keyboardType="number-pad"
+                maxLength={10}
                 autoCapitalize="none"
                 editable={!isLoading}
               />
@@ -199,7 +260,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
               </TouchableOpacity>
             </View>
           </View>
-
 
           {/* Submit Action */}
           <TouchableOpacity

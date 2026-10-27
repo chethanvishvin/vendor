@@ -381,6 +381,17 @@ export const MandatoryUpdateScreen: React.FC<MandatoryUpdateScreenProps> = ({
               <Text style={styles.secondaryButtonText}>Recheck Available Updates</Text>
             </TouchableOpacity>
           )}
+
+          {__DEV__ && onUpdateCompleted && (
+            <TouchableOpacity
+              style={{ marginTop: 16, paddingVertical: 10, alignItems: 'center' }}
+              onPress={onUpdateCompleted}
+              activeOpacity={0.7}>
+              <Text style={{ color: '#64748B', fontSize: 13, textDecorationLine: 'underline' }}>
+                🛠️ Dev Mode: Skip Update Check
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
       </ScrollView>
     </View>

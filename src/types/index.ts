@@ -4,28 +4,43 @@ export interface LoginRequest {
 }
 
 export interface VendorProfile {
+  // Common identity & Role
   VendorId: number;
-  VendorName: string;
-  CompanyName: string;
-  ContactPerson: string;
-  ContactNumber: string;
-  EmailAddress: string;
-  GSTNumber: string;
-  Address: string;
-  City: string;
-  State: string;
-  Remarks: string;
-  IsDisabled: boolean;
-  CreatedAt: string;
-  UpdatedAt: string;
-  CreatedByUserName: string;
-  UpdatedByUserName: string | null;
+  RoleId?: number; // 8 = Vendor, 9 = VendorWorker
+  userType?: 'Vendor' | 'VendorWorker' | string;
+
+  // Vendor specific attributes (RoleId: 8)
+  VendorName?: string;
+  CompanyName?: string | null;
+  ContactPerson?: string;
+  ContactNumber?: string;
+  EmailAddress?: string | null;
+  GSTNumber?: string | null;
+  Address?: string | null;
+  City?: string | null;
+  State?: string | null;
+  Remarks?: string | null;
+  IsDisabled?: boolean;
+  CreatedAt?: string;
+  UpdatedAt?: string | null;
+  CreatedByUserName?: string | null;
+  UpdatedByUserName?: string | null;
+
+  // Vendor Worker specific attributes (RoleId: 9)
+  VendorWorkerId?: number;
+  WorkerId?: number;
+  UserName?: string;
+  MobileNumber?: string;
+  CreatedByUserId?: number | null;
+  CreatedByVendorId?: number | null;
+  AdminCreatedAt?: string | null;
+  VendorCreatedAt?: string | null;
 }
 
 export interface LoginResponse {
   status: boolean;
   message: string;
-  userType: string;
+  userType: 'Vendor' | 'VendorWorker' | string;
   data: VendorProfile;
 }
 
@@ -61,6 +76,16 @@ export interface StationItem {
   SwitchSerialNumber: string;
   ResilientSerialNumber: string;
   SwitchFirmWareNumber?: string;
+  WorkerStationAssignmentId?: number;
+  WorkerId?: number;
+  WorkerName?: string | null;
+  VendorStatusName?: string;
+  PendingFileTypes?: VendorFileType[];
+  PendingFileTypeIds?: VendorFileType[];
+  InstallationSubmissionId?: number | null;
+  InstallationSubmissionStatusId?: number | null;
+  InstallationSubmissionStatusName?: string | null;
+  InstallationRemarks?: string | null;
 }
 
 export interface AssignmentItem {
@@ -151,6 +176,10 @@ export interface CompletedStationItem {
   InstallationRemarks: string | null;
   InstallationVendorId: number | null;
   files: CompletedStationFile[];
+  VendorStatusName?: string;
+  PendingFileTypes?: VendorFileType[];
+  WorkerName?: string | null;
+  WorkerId?: number;
 }
 
 export interface FetchCompletedStationsResponse {
@@ -191,5 +220,288 @@ export interface InstallationSubmissionResponse {
   data?: any;
 }
 
+export interface CreateVendorWorkerResponse {
+  status: boolean;
+  message: string;
+  data: {
+    VendorWorkerUserId: number;
+    VendorId: number;
+    UserName: string;
+    MobileNumber: string;
+    RoleId: number;
+    IncomingRoleId: number;
+    CreatedByUserId?: number | null;
+    CreatedByVendorId?: number | null;
+    TotalFiles?: number;
+  };
+}
 
+export interface ChangeVendorWorkerPasswordRequest {
+  VendorWorkerUserId: number;
+  NewPassword: string;
+  IncomingVendorId: number;
+  IncomingRoleId: number;
+}
 
+export interface ChangeVendorWorkerPasswordResponse {
+  status: boolean;
+  message: string;
+  data?: {
+    VendorWorkerUserId: number;
+    UserName?: string;
+    UpdatedByVendorId?: number;
+    VendorUpdatedAt?: string;
+  };
+}
+
+export interface VendorWorkerItem {
+  VendorWorkerUserId: number;
+  VendorId: number;
+  UserName: string;
+  MobileNumber: string;
+  RoleId?: number;
+  IsDisabled?: boolean;
+  CreatedByUserId?: number | null;
+  UpdatedByUserId?: number | null;
+  AdminCreatedAt?: string | null;
+  AdminUpdatedAt?: string | null;
+  CreatedByVendorId?: number | null;
+  UpdatedByVendorId?: number | null;
+  VendorCreatedAt?: string | null;
+  VendorUpdatedAt?: string | null;
+  createdAt?: number;
+  aadharCardUri?: string;
+  panCardUri?: string;
+  photoUri?: string;
+}
+
+export interface FetchVendorWorkersResponse {
+  status: boolean;
+  message: string;
+  data: VendorWorkerItem[];
+}
+
+export interface EditVendorWorkerRequest {
+  flagId: number;
+  VendorWorkerUserId: number;
+  VendorId: number;
+  UserName: string;
+  MobileNumber: string;
+}
+
+export interface EditVendorWorkerResponse {
+  status: boolean;
+  message: string;
+  data: VendorWorkerItem;
+}
+
+// Substation Assignment to Workers Types
+export interface WorkerDropdownItem {
+  WorkerId: number;
+  WorkerName: string;
+}
+
+export interface SubstationDropdownItem {
+  VendorAssignmentId: number;
+  VendorStationAssignmentId: number;
+  ExcelDataId: number;
+  StationName: string;
+  VendorId: number;
+  VendorAssignmentStatusId?: number;
+  VendorStationStatusId?: number;
+}
+
+export interface FetchAssignWorkerDpdwnResponse<T> {
+  status: boolean;
+  message: string;
+  count: number;
+  result: T[];
+}
+
+export interface InsertWorkerAssignmentRequest {
+  flagId: number;
+  VendorId: number;
+  VendorAssignmentId: number;
+  WorkerId: number;
+  ExcelDataIds: number[];
+  CreatedByUserName: string;
+}
+
+export interface InsertWorkerAssignmentResponse {
+  status: boolean;
+  message: string;
+  data?: any;
+  result?: any;
+}
+
+export interface SingleStationWorkerDropdownItem {
+  WorkerId: number;
+  WorkerName: string;
+}
+
+export interface FetchSingleStationWorkerDropdownResponse {
+  status: boolean;
+  message: string;
+  data: SingleStationWorkerDropdownItem[];
+}
+
+export interface InsertAssignToWorkerRequest {
+  flagId: number;
+  WorkerId: number;
+  VendorId: number;
+  vendorAssignmentId: number;
+  ExcelDataId: number;
+  CreatedByUserName: string;
+}
+
+export interface InsertAssignToWorkerResponse {
+  status: boolean;
+  message: string;
+  data?: {
+    WorkerStationAssignmentId: number;
+    VendorAssignmentId: number;
+    VendorId: number;
+    WorkerId: number;
+    ExcelDataId: number;
+    StatusId: number;
+    IsDisabled: boolean;
+    CreatedAt: string;
+    UpdatedAt?: string | null;
+    CreatedByUserName?: string | null;
+    UpdatedByUserName?: string | null;
+  };
+}
+
+export interface VendorWorkerStationAssignmentItem {
+  WorkerStationAssignmentId: number;
+  VendorAssignmentId: number;
+  VendorId: number;
+  WorkerId: number;
+  WorkerName: string;
+  WorkerMobileNumber: string;
+  WorkerRoleId?: number | null;
+  VendorName: string;
+  CompanyName: string;
+  ExcelDataId: number;
+  StationName: string;
+  Taluk?: string;
+  VoltageClass?: string;
+  InChangreAEJEname?: string;
+  StationContactNumber?: string;
+  SubStationAddress?: string;
+  PinCode?: string;
+  Latitude?: string;
+  Longitude?: string;
+  Zone?: string;
+  Circle?: string;
+  Division?: string;
+  StatusId?: number;
+  AssignmentIsDisabled?: boolean;
+  CreatedAt?: string;
+  UpdatedAt?: string;
+  CreatedByUserName?: string;
+  UpdatedByUserName?: string | null;
+}
+
+export interface FetchVendorAssignWorkerDetailsResponse {
+  status: boolean;
+  message: string;
+  count: number;
+  result: VendorWorkerStationAssignmentItem[];
+}
+
+export interface WorkerPendingStationItem {
+  WorkerStationAssignmentId: number;
+  VendorAssignmentId: number;
+  VendorId: number;
+  WorkerId: number;
+  ExcelDataId: number;
+  StatusId: number;
+  AssignmentIsDisabled: boolean;
+  AssignmentCreatedAt: string;
+  AssignmentUpdatedAt: string;
+  CreatedByUserName: string;
+  UpdatedByUserName: string | null;
+  Taluk: string;
+  Station: string;
+  VoltageClass: string;
+  InChangreAEJEname: string;
+  StationContactNumber: string;
+  SubStationAddress: string;
+  PinCode: string;
+  Latitude: string;
+  Longitude: string;
+  Zone: string;
+  Circle: string;
+  Division: string;
+  'Customer State'?: string;
+  WorkerName: string;
+  WorkerMobileNumber: string;
+  WorkerRoleId?: number | null;
+  WorkerIsDisabled?: boolean;
+  VendorName: string;
+  CompanyName: string;
+  VendorContactPerson?: string;
+  VendorContactNumber?: string;
+  VendorEmailAddress?: string | null;
+  GSTNumber?: string | null;
+  VendorAddress?: string | null;
+  VendorCity?: string | null;
+  VendorState?: string | null;
+  VendorRoleId?: number;
+  SwitchSerialNumber: string;
+  ResilientSerialNumber: string;
+  InstallationSubmissionId?: number;
+  SwitchFirmWareNumber?: string;
+  InstallationStatusId?: number;
+  InstallationCreatedAt?: string;
+  InstallationUpdatedAt?: string;
+  InstallationCreatedByUserName?: string;
+  InstallationUpdatedByUserName?: string;
+  InstallationRemarks?: string;
+  InstallationVendorId?: number;
+  files?: CompletedStationFile[];
+  PendingFileTypeIds?: VendorFileType[];
+  PendingFileTypes?: VendorFileType[];
+  VendorStatusName?: string;
+  InstallationSubmissionStatusName?: string | null;
+}
+
+export type WorkerCompletedStationItem = WorkerPendingStationItem;
+
+export interface FetchPendingWorkerListResponse {
+  status: boolean;
+  message: string;
+  count: number;
+  result: WorkerPendingStationItem[];
+}
+
+export interface WorkerInstallationViewRequest {
+  flagId: number;
+  InstallationSubmissionFileId: number;
+}
+
+export interface FetchWorkerInsertDropdownResponse {
+  status: boolean;
+  message: string;
+  count: number;
+  result: VendorFileType[];
+}
+
+export interface InsertWorkerStationSubmissionResponse {
+  status: boolean;
+  message: string;
+  data?: {
+    InstallationSubmissionId: number;
+    HistoryResilientNoId: number;
+    StationSubmissionId: number;
+    WorkerStationAssignmentId: number;
+    VendorStationAssignmentId: number;
+    VendorAssignmentId: number;
+    RouteStationStatusId: number;
+    UploadedFileCount: number;
+    TotalStations: number;
+    CompletedStations: number;
+    VendorAssignmentCompleted: boolean;
+  };
+}

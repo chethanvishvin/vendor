@@ -66,7 +66,27 @@ export const StationDetailScreen: React.FC<StationDetailScreenProps> = ({
 
   const isCompleted = isPending !== undefined
     ? !isPending
-    : Boolean('InstallationSubmissionId' in (station as any) || (station as any).files?.length > 0);
+    : Boolean(
+        station.VendorStatusId === 3 ||
+        station.StatusId === 3 ||
+        ((station as any).files?.length > 0 && !(station as any).PendingFileTypes?.length),
+      );
+
+  const isDraft = !isCompleted && Boolean(
+    station.StatusId === 2 ||
+    station.VendorStatusId === 2 ||
+    (station as any).InstallationSubmissionStatusId === 2 ||
+    station.VendorStatusName === 'Draft' ||
+    (station as any).InstallationSubmissionStatusName === 'Draft' ||
+    (station.PendingFileTypes && station.PendingFileTypes.length > 0) ||
+    ((station as any).PendingFileTypeIds && (station as any).PendingFileTypeIds.length > 0),
+  );
+
+  const isWorker =
+    currentVendor?.RoleId === 9 ||
+    currentVendor?.userType === 'VendorWorker' ||
+    Boolean(currentVendor?.VendorWorkerId) ||
+    Boolean((currentVendor as any)?.WorkerId);
 
   const isHighVoltage = station.VoltageClass === '220' || station.VoltageClass === '400';
 
@@ -106,14 +126,22 @@ export const StationDetailScreen: React.FC<StationDetailScreenProps> = ({
         <View
           style={[
             styles.statusPill,
-            isCompleted ? styles.statusPillDone : styles.statusPillPending,
+            isCompleted
+              ? styles.statusPillDone
+              : isDraft
+                ? styles.statusPillDraft
+                : styles.statusPillPending,
           ]}>
           <Text
             style={[
               styles.statusPillText,
-              isCompleted ? styles.statusTextDone : styles.statusTextPending,
+              isCompleted
+                ? styles.statusTextDone
+                : isDraft
+                  ? styles.statusTextDraft
+                  : styles.statusTextPending,
             ]}>
-            {isCompleted ? '✓ Done' : '⏳ Pending'}
+            {isCompleted ? '✓ Done' : isDraft ? '📝 Draft' : '⏳ Pending'}
           </Text>
         </View>
       </View>
@@ -123,6 +151,23 @@ export const StationDetailScreen: React.FC<StationDetailScreenProps> = ({
         style={styles.scrollArea}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}>
+
+        {/* Assigned Field Worker Card (For Vendor View) */}
+        {!isWorker && 'WorkerName' in station && station.WorkerName && station.WorkerName !== 'null' ? (
+          <View style={styles.card}>
+            <View style={styles.cardHeader}>
+              <Text style={styles.cardTitle}>👷 Assigned Field Worker</Text>
+            </View>
+            <View style={styles.engineerRow}>
+              <View style={styles.engineerInfo}>
+                <Text style={styles.engineerName}>{station.WorkerName}</Text>
+                {('WorkerId' in station && station.WorkerId) ? (
+                  <Text style={styles.engineerRole}>Field Worker ID #{station.WorkerId}</Text>
+                ) : null}
+              </View>
+            </View>
+          </View>
+        ) : null}
 
         {/* In-Charge Engineer Card */}
         <View style={styles.card}>
@@ -179,6 +224,7 @@ export const StationDetailScreen: React.FC<StationDetailScreenProps> = ({
           <InstallationProofSection
             station={station as StationItem}
             currentVendor={currentVendor}
+            isWorker={isWorker}
             onSuccess={onSubmissionSuccess}
           />
         )}
@@ -205,7 +251,10 @@ export const StationDetailScreen: React.FC<StationDetailScreenProps> = ({
                 </Text>
               </View>
             ) : null}
-            <InstallationPhotoGallery files={(station as any).files || []} />
+            <InstallationPhotoGallery
+              files={(station as any).files || []}
+              isWorker={isWorker}
+            />
           </View>
         )}
 
@@ -392,6 +441,11 @@ const styles = StyleSheet.create({
     borderColor: '#86EFAC',
   },
   statusPillPending: {
+    backgroundColor: '#F1F5F9',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  statusPillDraft: {
     backgroundColor: '#FEF3C7',
     borderWidth: 1,
     borderColor: '#FDE68A',
@@ -404,6 +458,9 @@ const styles = StyleSheet.create({
     color: '#15803D',
   },
   statusTextPending: {
+    color: '#64748B',
+  },
+  statusTextDraft: {
     color: '#B45309',
   },
   scrollArea: {

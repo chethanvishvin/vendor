@@ -6,10 +6,31 @@ import {
   FetchDashboardCountResponse,
   VendorFileType,
   InstallationSubmissionResponse,
+  CreateVendorWorkerResponse,
+  ChangeVendorWorkerPasswordRequest,
+  ChangeVendorWorkerPasswordResponse,
+  FetchVendorWorkersResponse,
+  EditVendorWorkerRequest,
+  EditVendorWorkerResponse,
+  WorkerDropdownItem,
+  SubstationDropdownItem,
+  FetchAssignWorkerDpdwnResponse,
+  InsertWorkerAssignmentRequest,
+  InsertWorkerAssignmentResponse,
+  VendorWorkerStationAssignmentItem,
+  WorkerPendingStationItem,
+  WorkerCompletedStationItem,
+  FetchPendingWorkerListResponse,
+  InsertWorkerStationSubmissionResponse,
+  FetchWorkerInsertDropdownResponse,
+  SingleStationWorkerDropdownItem,
+  FetchSingleStationWorkerDropdownResponse,
+  InsertAssignToWorkerRequest,
+  InsertAssignToWorkerResponse,
 } from '../types';
 
 const ENDPOINTS = [
-  'https://rna.vishvin.com/api/rna-service',
+  'http://192.168.23.117:5080/rna-service',
 ];
 
 let activeEndpointIndex = 0;
@@ -115,27 +136,65 @@ export const apiService = {
 
   async fetchInstallationImageBase64(
     fileId: number,
-    flagId: number = 2,
+    flagId?: number,
+    isWorker: boolean = false,
   ): Promise<string> {
     const cached = imageBase64Cache.get(fileId);
     if (cached) return cached;
 
-    const response = await fetchWithFallback(
-      '/apkassignVendor/fetchInstallationSubmissionFile',
-      {
+    // Endpoints configuration:
+    // Worker view photo API: POST /vendorWorkerAssign/workerInstallationView with { flagId: 1, InstallationSubmissionFileId: fileId }
+    // Vendor view photo API: POST /apkassignVendor/fetchInstallationSubmissionFile with { flagId: 2, InstallationSubmissionFileId: fileId }
+    const primaryEndpoint = isWorker
+      ? '/vendorWorkerAssign/workerInstallationView'
+      : '/apkassignVendor/fetchInstallationSubmissionFile';
+    const primaryFlag = flagId !== undefined ? flagId : (isWorker ? 1 : 2);
+
+    const fallbackEndpoint = isWorker
+      ? '/apkassignVendor/fetchInstallationSubmissionFile'
+      : '/vendorWorkerAssign/workerInstallationView';
+    const fallbackFlag = isWorker ? 2 : 1;
+
+    let response: Response | null = null;
+    let lastError: Error | null = null;
+
+    try {
+      response = await fetchWithFallback(primaryEndpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          flagId,
+          flagId: primaryFlag,
           InstallationSubmissionFileId: fileId,
         }),
-      },
-    );
+      });
 
-    if (!response.ok) {
-      throw new Error(`Failed to load installation photo (Status ${response.status})`);
+      if (!response.ok) {
+        throw new Error(`Endpoint ${primaryEndpoint} returned status ${response.status}`);
+      }
+    } catch (err: any) {
+      lastError = err;
+      try {
+        response = await fetchWithFallback(fallbackEndpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            flagId: fallbackFlag,
+            InstallationSubmissionFileId: fileId,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error(`Endpoint ${fallbackEndpoint} returned status ${response.status}`);
+        }
+      } catch (fallbackErr: any) {
+        throw new Error(
+          `Failed to load installation photo #${fileId} (Primary: ${lastError?.message}, Fallback: ${fallbackErr.message})`,
+        );
+      }
     }
 
     const blob = await response.blob();
@@ -154,6 +213,13 @@ export const apiService = {
 
     imageBase64Cache.set(fileId, base64Data);
     return base64Data;
+  },
+
+  async fetchWorkerInstallationImageBase64(
+    fileId: number,
+    flagId: number = 1,
+  ): Promise<string> {
+    return this.fetchInstallationImageBase64(fileId, flagId, true);
   },
 
   async fetchAssignStationDetailDropdown(
@@ -203,6 +269,57 @@ export const apiService = {
       { VendorFileTypeId: 7, VendorFileTypeName: 'AnnextureFile' },
       { VendorFileTypeId: 8, VendorFileTypeName: 'LIU OFC Splicing File' },
     ];
+  },
+
+  async fetchWorkerInsertDropdown(
+    flagId: number = 1,
+  ): Promise<VendorFileType[]> {
+    const response = await fetchWithFallback(
+      '/vendorWorkerAssign/fetchInsertDpdwn',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({ flagId }),
+      },
+    );
+
+    const data = await response.json();
+    if (data && data.status && Array.isArray(data.result)) {
+      return data.result;
+    }
+    if (Array.isArray(data.result)) {
+      return data.result;
+    }
+    if (!response.ok) {
+      throw new Error(data.message || 'Failed to fetch worker photo upload options.');
+    }
+    return data.result || [];
+  },
+
+  async insertWorkerStationSubmission(
+    formData: FormData,
+  ): Promise<InsertWorkerStationSubmissionResponse> {
+    const response = await fetchWithFallback(
+      '/vendorWorkerAssign/insertingWorkerStationSubmission',
+      {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+        },
+        body: formData,
+      },
+    );
+
+    const data = await response.json();
+    if (!response.ok || data.status === false) {
+      throw new Error(
+        data.message || 'Failed to submit worker station installation.',
+      );
+    }
+    return data;
   },
 
   async createInstallationSubmission(
@@ -277,6 +394,265 @@ export const apiService = {
       throw new Error(
         data.message || 'Failed to fetch dashboard count from server.',
       );
+    }
+    return data;
+  },
+
+  async createVendorWorker(formData: FormData): Promise<CreateVendorWorkerResponse> {
+    const response = await fetchWithFallback(
+      '/apkassignVendor/apkcreateVendorWorkerUser',
+      {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+        },
+        body: formData,
+      },
+    );
+
+    const data = await response.json();
+    if (!response.ok || !data.status) {
+      throw new Error(data.message || 'Failed to create vendor worker.');
+    }
+    return data;
+  },
+
+  async changeVendorWorkerPassword(
+    params: ChangeVendorWorkerPasswordRequest,
+  ): Promise<ChangeVendorWorkerPasswordResponse> {
+    const response = await fetchWithFallback(
+      '/apkassignVendor/apkchangeVendorWorkerUserPassword',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify(params),
+      },
+    );
+
+    const data = await response.json();
+    if (!response.ok || !data.status) {
+      throw new Error(data.message || 'Failed to change worker password.');
+    }
+    return data;
+  },
+
+  async fetchVendorWorkers(
+    vendorId: number,
+    flagId: number = 2,
+  ): Promise<FetchVendorWorkersResponse> {
+    const response = await fetchWithFallback(
+      '/apkassignVendor/apkfetchVendorWorkerUser',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({ flagId, VendorId: vendorId }),
+      },
+    );
+
+    const data = await response.json();
+    if (!response.ok || !data.status) {
+      throw new Error(data.message || 'Failed to fetch vendor workers.');
+    }
+    return data;
+  },
+
+  async editVendorWorker(
+    params: EditVendorWorkerRequest,
+  ): Promise<EditVendorWorkerResponse> {
+    const response = await fetchWithFallback(
+      '/apkassignVendor/apkEditVendorWorker',
+      {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify(params),
+      },
+    );
+
+    const data = await response.json();
+    if (!response.ok || !data.status) {
+      throw new Error(data.message || 'Failed to update vendor worker details.');
+    }
+    return data;
+  },
+
+  async fetchWorkerDropdown(vendorId: number): Promise<WorkerDropdownItem[]> {
+    const response = await fetchWithFallback(
+      '/vendorWorkerAssign/fetchAssignWorkerDpdwn',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({ flagId: 2, VendorId: vendorId }),
+      },
+    );
+
+    const data = await response.json();
+    if (!response.ok || !data.status) {
+      throw new Error(data.message || 'Failed to fetch workers dropdown.');
+    }
+    return data.result || [];
+  },
+
+  async fetchSubstationDropdown(vendorId: number): Promise<SubstationDropdownItem[]> {
+    const response = await fetchWithFallback(
+      '/vendorWorkerAssign/fetchAssignWorkerDpdwn',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({ flagId: 1, VendorId: vendorId }),
+      },
+    );
+
+    const data = await response.json();
+    if (!response.ok || !data.status) {
+      throw new Error(data.message || 'Failed to fetch substations dropdown.');
+    }
+    return data.result || [];
+  },
+
+  async insertWorkerAssignment(
+    params: InsertWorkerAssignmentRequest,
+  ): Promise<InsertWorkerAssignmentResponse> {
+    const response = await fetchWithFallback(
+      '/vendorWorkerAssign/insertWorkerAssignment',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify(params),
+      },
+    );
+
+    const data = await response.json();
+    if (!response.ok || !data.status) {
+      throw new Error(data.message || 'Failed to assign substations to worker.');
+    }
+    return data;
+  },
+
+  async fetchVendorAssignWorkerDetails(
+    vendorId: number,
+    flagId: number = 1,
+  ): Promise<VendorWorkerStationAssignmentItem[]> {
+    const response = await fetchWithFallback(
+      '/vendorWorkerAssign/fetchVendorAssignWorkerDetails',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({ flagId, VendorId: vendorId }),
+      },
+    );
+
+    const data = await response.json();
+    // Safely parse array result even if backend sets status: false
+    if (Array.isArray(data.result)) {
+      return data.result;
+    }
+    if (data && data.status) {
+      return data.result || [];
+    }
+    if (!response.ok) {
+      throw new Error(data.message || 'Failed to fetch vendor-worker assignments.');
+    }
+    return data.result || [];
+  },
+
+  async fetchPendingWorkerList(
+    workerId: number,
+    flagId: number = 1,
+  ): Promise<WorkerPendingStationItem[]> {
+    const response = await fetchWithFallback(
+      '/vendorWorkerAssign/fetchPenidngWorkerList',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({ flagId, WorkerId: workerId }),
+      },
+    );
+
+    const data = await response.json();
+    if (Array.isArray(data.result)) {
+      return data.result;
+    }
+    if (data && data.status && Array.isArray(data.result)) {
+      return data.result;
+    }
+    if (!response.ok) {
+      throw new Error(data.message || 'Failed to fetch pending stations for worker.');
+    }
+    return data.result || [];
+  },
+
+  async fetchCompletedWorkerList(
+    workerId: number,
+    flagId: number = 2,
+  ): Promise<WorkerCompletedStationItem[]> {
+    return this.fetchPendingWorkerList(workerId, flagId);
+  },
+
+  async fetchSingleStationWorkers(
+    vendorId: number,
+    flagId: number = 2,
+  ): Promise<SingleStationWorkerDropdownItem[]> {
+    const response = await fetchWithFallback(
+      '/vendorAssignDetail/AssigntoWorkerDrpdwnbsedonVendor',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({ flagId, VendorId: vendorId }),
+      },
+    );
+
+    const data: FetchSingleStationWorkerDropdownResponse = await response.json();
+    if (!response.ok || !data.status) {
+      throw new Error(data.message || 'Failed to fetch workers list.');
+    }
+    return data.data || [];
+  },
+
+  async insertSingleStationAssignToWorker(
+    params: InsertAssignToWorkerRequest,
+  ): Promise<InsertAssignToWorkerResponse> {
+    const response = await fetchWithFallback(
+      '/vendorAssignDetail/InsertAssigntoWorker',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify(params),
+      },
+    );
+
+    const data: InsertAssignToWorkerResponse = await response.json();
+    if (!response.ok || !data.status) {
+      throw new Error(data.message || 'Failed to assign station to worker.');
     }
     return data;
   },

@@ -32,6 +32,12 @@ export const StationDetailModal: React.FC<StationDetailModalProps> = ({
 }) => {
   if (!station) return null;
 
+  const isWorker =
+    currentVendor?.RoleId === 9 ||
+    currentVendor?.userType === 'VendorWorker' ||
+    Boolean(currentVendor?.VendorWorkerId) ||
+    Boolean((currentVendor as any)?.WorkerId);
+
   const handleCall = (phoneNumber: string) => {
     if (!phoneNumber) return;
     const cleanNumber = phoneNumber.replace(/\s+/g, '');
@@ -139,6 +145,7 @@ export const StationDetailModal: React.FC<StationDetailModalProps> = ({
               <InstallationProofSection
                 station={station as StationItem}
                 currentVendor={currentVendor}
+                isWorker={isWorker}
                 onSuccess={() => {
                   if (onSubmissionSuccess) {
                     onSubmissionSuccess();
@@ -170,7 +177,10 @@ export const StationDetailModal: React.FC<StationDetailModalProps> = ({
                     </Text>
                   </View>
                 ) : null}
-                <InstallationPhotoGallery files={(station as any).files || []} />
+                <InstallationPhotoGallery
+                  files={(station as any).files || []}
+                  isWorker={isWorker}
+                />
               </View>
             )}
 

@@ -127,6 +127,7 @@ export const getDatabase = async (): Promise<DB> => {
         stationName TEXT,
         voltageClass TEXT,
         vendorId INTEGER NOT NULL,
+        vendorWorkerId INTEGER,
         remarks TEXT,
         createdByUserName TEXT,
         flagId TEXT DEFAULT '2',
@@ -143,7 +144,10 @@ export const getDatabase = async (): Promise<DB> => {
       );
     `);
 
-    // Migration for offline_submissions hardware and route station status columns
+    // Migration for offline_submissions hardware, worker, and route station status columns
+    try {
+      await db.execute('ALTER TABLE offline_submissions ADD COLUMN vendorWorkerId INTEGER;');
+    } catch (_) {}
     try {
       await db.execute('ALTER TABLE offline_submissions ADD COLUMN switchSerialNumber TEXT;');
     } catch (_) {}
@@ -155,6 +159,12 @@ export const getDatabase = async (): Promise<DB> => {
     } catch (_) {}
     try {
       await db.execute('ALTER TABLE offline_submissions ADD COLUMN routeStationStatusId INTEGER;');
+    } catch (_) {}
+    try {
+      await db.execute('ALTER TABLE offline_submissions ADD COLUMN workerStationAssignmentId INTEGER;');
+    } catch (_) {}
+    try {
+      await db.execute('ALTER TABLE offline_submissions ADD COLUMN isWorkerSubmission INTEGER DEFAULT 0;');
     } catch (_) {}
 
     // Deduplication cleanup: keep only the latest record for each (excelDataId, vendorId)
@@ -730,6 +740,9 @@ export interface OfflineSubmissionItem {
   stationName: string;
   voltageClass: string;
   vendorId: number;
+  vendorWorkerId?: number;
+  workerStationAssignmentId?: number;
+  isWorkerSubmission?: boolean;
   remarks: string;
   createdByUserName: string;
   flagId: string;
@@ -787,6 +800,9 @@ export const queueOfflineSubmission = async (params: {
   stationName: string;
   voltageClass: string;
   vendorId: number;
+  vendorWorkerId?: number;
+  workerStationAssignmentId?: number;
+  isWorkerSubmission?: boolean;
   remarks: string;
   createdByUserName: string;
   flagId?: string;
@@ -815,6 +831,9 @@ export const queueOfflineSubmission = async (params: {
         stationName,
         voltageClass,
         vendorId,
+        vendorWorkerId,
+        workerStationAssignmentId,
+        isWorkerSubmission,
         remarks,
         createdByUserName,
         flagId,
@@ -828,15 +847,18 @@ export const queueOfflineSubmission = async (params: {
         errorMessage,
         createdAt,
         updatedAt
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         params.excelDataId,
         params.stationName || 'Substation',
         params.voltageClass || '',
         params.vendorId,
+        params.vendorWorkerId || null,
+        params.workerStationAssignmentId || null,
+        params.isWorkerSubmission ? 1 : 0,
         params.remarks || '',
         params.createdByUserName || 'Vendor',
-        params.flagId || '2',
+        params.flagId || (params.isWorkerSubmission ? '1' : '2'),
         JSON.stringify(params.fileTypeIds),
         JSON.stringify(params.files),
         params.switchSerialNumber || '',
@@ -899,6 +921,9 @@ export const getOfflineSubmissions = async (
           stationName: (row.stationName as string) || 'Substation',
           voltageClass: (row.voltageClass as string) || '',
           vendorId: Number(row.vendorId),
+          vendorWorkerId: row.vendorWorkerId ? Number(row.vendorWorkerId) : undefined,
+          workerStationAssignmentId: row.workerStationAssignmentId ? Number(row.workerStationAssignmentId) : undefined,
+          isWorkerSubmission: Boolean(row.isWorkerSubmission),
           remarks: (row.remarks as string) || '',
           createdByUserName: (row.createdByUserName as string) || 'Vendor',
           flagId: (row.flagId as string) || '2',
@@ -1004,20 +1029,55 @@ export const syncSingleOfflineSubmission = async (
   try {
     await updateOfflineSubmissionStatus(item.id, 'syncing');
 
+    // Determine if this is a worker submission:
+    // 1. flagId '1' is strictly for worker submissions
+    // 2. flagId '2' is strictly for vendor submissions
+    // 3. Otherwise fall back to isWorkerSubmission boolean flag
+    const isWorkerSubmission =
+      item.flagId === '1' ||
+      (item.flagId !== '2' && Boolean(item.isWorkerSubmission));
+
     const formData = new FormData();
-    formData.append('ExcelDataId', String(item.excelDataId));
-    formData.append('VendorId', String(item.vendorId));
-    formData.append(
-      'Remarks',
-      item.remarks.trim() || `Installation completed for ${item.stationName}`,
-    );
-    formData.append('CreatedByUserName', item.createdByUserName || 'Vendor');
-    formData.append('flagId', item.flagId || '2');
-    formData.append('FileTypeId', JSON.stringify(item.fileTypeIds));
-    formData.append('SwitchSerialNumber', item.switchSerialNumber || '');
-    formData.append('ResilientSerialNumber', item.resilientSerialNumber || '');
-    formData.append('SwitchFirmWareNumber', item.switchFirmwareNumber || '');
-    formData.append('RouteStationStatusId', String(item.routeStationStatusId || 0));
+    if (isWorkerSubmission) {
+      formData.append('flagId', '1');
+      formData.append(
+        'WorkerStationAssignmentId',
+        String(item.workerStationAssignmentId || 0),
+      );
+      formData.append(
+        'WorkerId',
+        String(item.vendorWorkerId || item.vendorId || 0),
+      );
+      formData.append('ExcelDataId', String(item.excelDataId));
+      formData.append(
+        'Remarks',
+        item.remarks.trim() || 'completed',
+      );
+      formData.append('SwitchFirmWareNumber', item.switchFirmwareNumber || 'N/A');
+      formData.append('SwitchSerialNumber', item.switchSerialNumber || 'N/A');
+      formData.append('ResilientSerialNumber', item.resilientSerialNumber || 'N/A');
+      formData.append('CreatedByUserName', item.createdByUserName || 'Worker');
+      formData.append('FileTypeIds', JSON.stringify(item.fileTypeIds));
+      formData.append('FileTypeId', JSON.stringify(item.fileTypeIds));
+    } else {
+      formData.append('ExcelDataId', String(item.excelDataId));
+      formData.append('VendorId', String(item.vendorId));
+      if (item.vendorWorkerId) {
+        formData.append('VendorWorkerId', String(item.vendorWorkerId));
+      }
+      formData.append(
+        'Remarks',
+        item.remarks.trim() || `Installation completed for ${item.stationName}`,
+      );
+      formData.append('CreatedByUserName', item.createdByUserName || 'Vendor');
+      formData.append('flagId', item.flagId || '2');
+      formData.append('FileTypeId', JSON.stringify(item.fileTypeIds));
+      formData.append('FileTypeIds', JSON.stringify(item.fileTypeIds));
+      formData.append('SwitchSerialNumber', item.switchSerialNumber || 'N/A');
+      formData.append('ResilientSerialNumber', item.resilientSerialNumber || 'N/A');
+      formData.append('SwitchFirmWareNumber', item.switchFirmwareNumber || 'N/A');
+      formData.append('RouteStationStatusId', String(item.routeStationStatusId || 0));
+    }
 
     // Append all stored files
     item.files.forEach(file => {
@@ -1034,8 +1094,12 @@ export const syncSingleOfflineSubmission = async (
       }
     });
 
-    // Call the API service
-    await apiService.createInstallationSubmission(formData);
+    // Call the appropriate API service
+    if (isWorkerSubmission) {
+      await apiService.insertWorkerStationSubmission(formData);
+    } else {
+      await apiService.createInstallationSubmission(formData);
+    }
 
     // FLUSH FROM DB: Delete row only after successful submission
     await deleteOfflineSubmission(item.id);
@@ -1099,5 +1163,6 @@ export const syncAllOfflineSubmissions = async (
     isSyncAllInProgress = false;
   }
 };
+
 
 

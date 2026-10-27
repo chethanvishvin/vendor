@@ -212,7 +212,13 @@ export default function App() {
           <MandatoryUpdateScreen
             manifest={updateResult.manifest}
             installedInfo={updateResult.installedInfo}
-            onUpdateCompleted={() => runUpdateCheck(false)}
+            onUpdateCompleted={() => {
+              if (__DEV__) {
+                setUpdateResult({ status: 'UP_TO_DATE' });
+              } else {
+                runUpdateCheck(false);
+              }
+            }}
             onRetryCheck={() => runUpdateCheck(true)}
           />
         </SafeAreaView>

@@ -179,9 +179,12 @@ export const OfflineQueueScreen: React.FC<OfflineQueueScreenProps> = ({
           </View>
         </View>
 
-        {/* Timestamp */}
+        {/* Timestamp & User */}
         <Text style={styles.timestampText}>
           Saved: {new Date(item.createdAt).toLocaleString()} • ExcelDataId #{item.excelDataId}
+          {item.vendorWorkerId
+            ? ` • 👷 Worker #${item.vendorWorkerId} (${item.createdByUserName})`
+            : ` • 👤 By ${item.createdByUserName}`}
         </Text>
 
         {/* Error notice if failed */}

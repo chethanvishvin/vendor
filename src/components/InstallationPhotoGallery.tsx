@@ -19,10 +19,11 @@ const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 interface PhotoItemProps {
   file: CompletedStationFile;
+  isWorker?: boolean;
   onPress: (uri: string, file: CompletedStationFile) => void;
 }
 
-const PhotoThumbnail: React.FC<PhotoItemProps> = ({ file, onPress }) => {
+const PhotoThumbnail: React.FC<PhotoItemProps> = ({ file, isWorker = false, onPress }) => {
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [hasError, setHasError] = useState<boolean>(false);
@@ -32,8 +33,14 @@ const PhotoThumbnail: React.FC<PhotoItemProps> = ({ file, onPress }) => {
     setIsLoading(true);
     setHasError(false);
 
+    // If worker: calls workerInstallationView with flagId: 1
+    // If vendor: calls fetchInstallationSubmissionFile with flagId: 2
     apiService
-      .fetchInstallationImageBase64(file.installationSubmissionFileId)
+      .fetchInstallationImageBase64(
+        file.installationSubmissionFileId,
+        isWorker ? 1 : 2,
+        isWorker,
+      )
       .then(uri => {
         if (isMounted) {
           setImageUri(uri);
@@ -51,7 +58,7 @@ const PhotoThumbnail: React.FC<PhotoItemProps> = ({ file, onPress }) => {
     return () => {
       isMounted = false;
     };
-  }, [file.installationSubmissionFileId]);
+  }, [file.installationSubmissionFileId, isWorker]);
 
   const getBadgeTitle = (name: string) => {
     if (name.toLowerCase().includes('installation')) return '📸 Installation';
@@ -95,10 +102,12 @@ const PhotoThumbnail: React.FC<PhotoItemProps> = ({ file, onPress }) => {
 
 interface InstallationPhotoGalleryProps {
   files: CompletedStationFile[];
+  isWorker?: boolean;
 }
 
 export const InstallationPhotoGallery: React.FC<InstallationPhotoGalleryProps> = ({
   files,
+  isWorker = false,
 }) => {
   const [activePhoto, setActivePhoto] = useState<{
     uri: string;
@@ -127,6 +136,7 @@ export const InstallationPhotoGallery: React.FC<InstallationPhotoGalleryProps> =
           <PhotoThumbnail
             key={file.installationSubmissionFileId}
             file={file}
+            isWorker={isWorker}
             onPress={(uri, f) => setActivePhoto({ uri, file: f })}
           />
         ))}
