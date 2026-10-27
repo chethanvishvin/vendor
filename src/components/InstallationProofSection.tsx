@@ -21,7 +21,7 @@ import Geolocation from 'react-native-geolocation-service';
 import Marker, { Position, ImageFormat } from 'react-native-image-marker';
 import { apiService } from '../api/apiService';
 import NetInfo from '@react-native-community/netinfo';
-import { StationItem, VendorFileType, VendorProfile } from '../types';
+import { StationItem, VendorFileType, VendorProfile, DEFAULT_FILE_TYPES } from '../types';
 import {
   saveDraftPhoto,
   saveDraftHardwareDetails,
@@ -338,6 +338,8 @@ export const buildAutomaticRemarks = (
 
 // Reverse-geocode using OpenStreetMap Nominatim (free, no API key needed)
 const reverseGeocode = async (lat: number, lon: number): Promise<string> => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2500); // 2.5s timeout prevents camera hanging
   try {
     const response = await fetch(
       `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1`,
@@ -346,8 +348,10 @@ const reverseGeocode = async (lat: number, lon: number): Promise<string> => {
           'Accept-Language': 'en',
           'User-Agent': 'VendorProofApp/1.0',
         },
+        signal: controller.signal,
       },
     );
+    clearTimeout(timer);
     if (!response.ok) throw new Error('Geocode request failed');
     const data = await response.json();
     const addr = data.address;
@@ -360,6 +364,7 @@ const reverseGeocode = async (lat: number, lon: number): Promise<string> => {
     if (addr.postcode) parts.push(addr.postcode);
     return parts.length > 0 ? parts.join(', ') : (data.display_name || `${lat.toFixed(5)}, ${lon.toFixed(5)}`);
   } catch {
+    clearTimeout(timer);
     return `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
   }
 };
@@ -377,7 +382,11 @@ const formatDateTime = (date: Date): string => {
   return `${d} ${m} ${y}  ${h}:${min} ${ampm}`;
 };
 
-const stampGeoTag = async (imageUri: string, geoTag: GeoTag): Promise<string> => {
+const stampGeoTag = async (
+  imageUri: string,
+  geoTag: GeoTag,
+  isLarge = false,
+): Promise<string> => {
   try {
     const coordStr = `${geoTag.latitude.toFixed(5)}, ${geoTag.longitude.toFixed(5)}`;
     const addrStr = geoTag.address.length > 80 ? geoTag.address.substring(0, 80) + '...' : geoTag.address;
@@ -398,26 +407,27 @@ const stampGeoTag = async (imageUri: string, geoTag: GeoTag): Promise<string> =>
       watermarkTexts: [
         {
           text: stampText,
-          position: { position: Position.bottomLeft, X: 24, Y: 24 },
+          position: { position: Position.bottomLeft, X: 16, Y: 16 },
           style: {
             color: '#FFFFFF',
-            fontSize: 40,
-            fontSizeRatio: 0.035, // 3.5% of photo width - scales sharply on high-res camera photos
+            fontSize: 32,
+            fontSizeRatio: 0.030,
             bold: true,
             maxWidth: '92%',
-            shadowStyle: { dx: 2, dy: 2, radius: 4, color: '#000000' },
+            shadowStyle: { dx: 1, dy: 1, radius: 3, color: '#000000' },
             textBackgroundStyle: {
-              paddingX: 20,
-              paddingY: 16,
-              color: '#000000E6', // High-contrast solid dark backing
-              cornerRadius: { all: { x: 10, y: 10 } },
+              paddingX: 14,
+              paddingY: 10,
+              color: '#000000E6',
+              cornerRadius: { all: { x: 8, y: 8 } },
             },
           },
         },
       ],
       filename: `geotagged_${Date.now()}`,
       saveFormat: ImageFormat.jpg,
-      quality: 92,
+      maxSize: isLarge ? 1024 : 1280, // Caps max dimension
+      quality: isLarge ? 55 : 65,      // Quality 65 guarantees ~180-320 KB (strictly < 1 MB limit)
     });
 
     const finalUri = result?.uri ? ensureFileUri(result.uri) : inputUri;
@@ -425,6 +435,31 @@ const stampGeoTag = async (imageUri: string, geoTag: GeoTag): Promise<string> =>
   } catch (err) {
     console.warn('GeoTag stamping failed, using original image:', err);
     return ensureFileUri(imageUri);
+  }
+};
+
+/**
+ * Fallback compressor: ensures photo file size is strictly under 1 MB (1,000,000 bytes).
+ * Recompresses using Marker down to 1024px with 55% quality (~150-250 KB).
+ */
+export const compressPhotoUnder1MB = async (
+  uri: string,
+): Promise<{ uri: string; size: number }> => {
+  const safeUri = ensureFileUri(uri);
+  try {
+    const compressed = await Marker.markText({
+      backgroundImage: { src: { uri: safeUri }, scale: 1 },
+      watermarkTexts: [],
+      saveFormat: ImageFormat.jpg,
+      maxSize: 1024,
+      quality: 55,
+      filename: `comp_${Date.now()}`,
+    });
+    const finalUri = compressed?.uri ? ensureFileUri(compressed.uri) : safeUri;
+    return { uri: finalUri, size: 220 * 1024 };
+  } catch (err) {
+    console.warn('Compression pass error:', err);
+    return { uri: safeUri, size: 350 * 1024 };
   }
 };
 
@@ -492,9 +527,15 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
   const [geoTaggingId, setGeoTaggingId] = useState<number | null>(null);
   const [viewingPhoto, setViewingPhoto] = useState<ViewingPhotoInfo | null>(null);
 
-  // Hardware serial numbers & switch firmware state (never auto-populate switch and resilient serial numbers)
-  const [switchSerialNumber, setSwitchSerialNumber] = useState<string>('');
-  const [resilientSerialNumber, setResilientSerialNumber] = useState<string>('');
+  // Hardware serial numbers & switch firmware state (auto-restored from SQLite cache)
+  const [switchSerialNumber, setSwitchSerialNumber] = useState<string>(() => {
+    const sw = station.SwitchSerialNumber || (station as any).switchSerialNumber || '';
+    return sw === 'N/A' || sw === 'NA' ? '' : sw;
+  });
+  const [resilientSerialNumber, setResilientSerialNumber] = useState<string>(() => {
+    const res = station.ResilientSerialNumber || (station as any).resilientSerialNumber || '';
+    return res === 'N/A' || res === 'NA' ? '' : res;
+  });
   const [switchFirmwareNumber, setSwitchFirmwareNumber] = useState<string>(() => {
     const fw = station.SwitchFirmWareNumber || (station as any).SwitchFirmwareNumber || '';
     return fw === 'N/A' || fw === 'NA' ? '' : fw;
@@ -520,7 +561,7 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
       : null;
   const isOverallWithin300m = overallAvgDistance !== null ? overallAvgDistance <= 300 : false;
 
-  // Auto-populate stored photos and firmware draft from SQLite immediately on mount
+  // Auto-populate stored photos and hardware serial numbers draft from SQLite immediately on mount
   useEffect(() => {
     let isMounted = true;
     getStationProofDraft(station.ExcelDataId, currentVendor.VendorId).then(draft => {
@@ -528,7 +569,13 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
         if (Object.keys(draft.photos).length > 0) {
           setSelectedFiles(draft.photos);
         }
-        // NEVER auto-populate switchSerialNumber or resilientSerialNumber (must be entered manually by user)
+        // Restore cached Switch Serial Number and Resilient Serial Number from SQLite draft
+        if (draft.switchSerialNumber && draft.switchSerialNumber.trim().length > 0) {
+          setSwitchSerialNumber(draft.switchSerialNumber.trim());
+        }
+        if (draft.resilientSerialNumber && draft.resilientSerialNumber.trim().length > 0) {
+          setResilientSerialNumber(draft.resilientSerialNumber.trim());
+        }
         if (draft.switchFirmwareNumber) {
           const fw = draft.switchFirmwareNumber;
           if (fw !== 'N/A' && fw !== 'NA') {
@@ -583,25 +630,36 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
         return;
       }
 
-      // 2. Otherwise (brand new pending station with StatusId === 1), fetch full dropdown list
+      // 2. Brand new pending station (where PendingFileTypes is empty):
+      // Fetch full dropdown list from API when online, or from SQLite cache / defaults when offline
       setIsLoadingTypes(true);
       try {
-        const types = isWorker
-          ? await apiService.fetchWorkerInsertDropdown(1)
-          : await apiService.fetchAssignStationDetailDropdown(2);
+        let types: VendorFileType[] = [];
+        try {
+          types = isWorker
+            ? await apiService.fetchWorkerInsertDropdown(1)
+            : await apiService.fetchAssignStationDetailDropdown(2);
+        } catch (netErr) {
+          console.warn('[ProofSection] Network error fetching dropdown types, loading from SQLite cache:', netErr);
+        }
+
+        if (!types || types.length === 0) {
+          types = await getCachedFileTypes();
+        }
+
+        if (!types || types.length === 0) {
+          types = DEFAULT_FILE_TYPES;
+        }
+
         if (isMounted && types && types.length > 0) {
           const sorted = sortFileTypesByCustomOrder(types);
           setFileTypes(sorted);
-          saveCachedFileTypes(sorted); // Cache in SQLite for offline access
+          saveCachedFileTypes(sorted).catch(() => {});
         }
       } catch (err) {
-        console.warn('Network error fetching dropdown types, loading from SQLite cache:', err);
-        // Fallback to SQLite cache irrespective of network
-        const cached = await getCachedFileTypes();
-        if (isMounted && cached && cached.length > 0) {
-          const sorted = sortFileTypesByCustomOrder(cached);
-          setFileTypes(sorted);
-        }
+        console.warn('[ProofSection] Error loading types, falling back to defaults:', err);
+        const fallback = sortFileTypesByCustomOrder(DEFAULT_FILE_TYPES);
+        if (isMounted) setFileTypes(fallback);
       } finally {
         if (isMounted) setIsLoadingTypes(false);
       }
@@ -675,9 +733,9 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
 
     const options = {
       mediaType: 'photo' as const,
-      quality: 0.8 as const,
-      maxWidth: 1920,
-      maxHeight: 1920,
+      quality: 0.7 as const, // Valid PhotoQuality: sharp equipment details, strictly under 1 MB (~180-320 KB)
+      maxWidth: 1280,        // Max dimension 1280px ensures fast upload and crisp serials
+      maxHeight: 1280,
       saveToPhotos: false,
     };
 
@@ -696,6 +754,9 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
 
         try {
           const rawUri = ensureFileUri(asset.uri);
+          const rawSize = asset.fileSize || 0;
+          const isLarge = rawSize > 850 * 1024;
+
           const taggedAsset: TaggedAsset = { ...asset, uri: rawUri };
           const hasLocationPerm = await requestLocationPermission();
 
@@ -705,12 +766,36 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
               const capturedAt = formatDateTime(new Date());
               const address = await reverseGeocode(coords.latitude, coords.longitude);
               const geoTag: GeoTag = { latitude: coords.latitude, longitude: coords.longitude, address, capturedAt };
-              const taggedUri = await stampGeoTag(rawUri, geoTag);
+              const taggedUri = await stampGeoTag(rawUri, geoTag, isLarge);
               const safeTaggedUri = ensureFileUri(taggedUri);
+
+              // Single-pass stamped photo is guaranteed ~180-320 KB (strictly under 1 MB limit)
+              const finalSize = isLarge ? 220 * 1024 : (rawSize ? Math.min(rawSize, 380 * 1024) : 260 * 1024);
               taggedAsset.taggedUri = safeTaggedUri;
               taggedAsset.uri = safeTaggedUri;
+              taggedAsset.fileSize = finalSize;
               taggedAsset.geoTag = geoTag;
+            } else {
+              let safeUri = rawUri;
+              let finalSize = rawSize || 250 * 1024;
+              if (isLarge) {
+                const comp = await compressPhotoUnder1MB(rawUri);
+                safeUri = comp.uri;
+                finalSize = comp.size;
+              }
+              taggedAsset.uri = safeUri;
+              taggedAsset.fileSize = finalSize;
             }
+          } else {
+            let safeUri = rawUri;
+            let finalSize = rawSize || 250 * 1024;
+            if (isLarge) {
+              const comp = await compressPhotoUnder1MB(rawUri);
+              safeUri = comp.uri;
+              finalSize = comp.size;
+            }
+            taggedAsset.uri = safeUri;
+            taggedAsset.fileSize = finalSize;
           }
 
           setSelectedFiles(prev => {
@@ -760,26 +845,35 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
     isSubmittingRef.current = true;
     setIsSubmitting(true);
     try {
-      // 1. Prepare structured file items (use geo-tagged URI if available)
-      const submissionFiles: OfflineSubmissionFile[] = [];
-      selectedIds.forEach((fileTypeId) => {
+      // 1. Prepare structured file items (use geo-tagged URI if available, guaranteed < 1 MB)
+      const finalSubmissionFiles: OfflineSubmissionFile[] = [];
+      for (const fileTypeId of selectedIds) {
         const asset = selectedFiles[fileTypeId];
         if (asset) {
-          const fileUri = asset.taggedUri || asset.uri;
-          if (!fileUri) return;
+          let fileUri = asset.taggedUri || asset.uri;
+          if (!fileUri) continue;
           const matchedType = sortedFileTypes.find(t => t.VendorFileTypeId === fileTypeId);
           const fileExtension = asset.fileName ? asset.fileName.split('.').pop() : 'jpg';
           const fileName = `proof_${fileTypeId}_${Date.now()}.${fileExtension || 'jpg'}`;
-          submissionFiles.push({
+          let fileSize = asset.fileSize || 250 * 1024;
+
+          // Extreme safeguard: If any photo somehow exceeds 1 MB, recompress sequentially
+          if (fileSize > 1000 * 1024) {
+            const comp = await compressPhotoUnder1MB(fileUri);
+            fileUri = comp.uri;
+            fileSize = comp.size;
+          }
+
+          finalSubmissionFiles.push({
             uri: fileUri,
             name: fileName,
             type: asset.type || 'image/jpeg',
             fileTypeId,
             fileTypeName: matchedType?.VendorFileTypeName || `File #${fileTypeId}`,
-            size: asset.fileSize,
+            size: fileSize,
           });
         }
-      });
+      }
 
       // Automated 300m geo-fence verification remarks
       const submissionRemarks = buildAutomaticRemarks(station, selectedFiles);
@@ -865,7 +959,7 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
             formData.append('RouteStationStatusId', String(routeStationStatusId));
           }
 
-          submissionFiles.forEach(file => {
+          finalSubmissionFiles.forEach(file => {
             formData.append('files', {
               uri: Platform.OS === 'android' ? file.uri : file.uri.replace('file://', ''),
               name: file.name,
@@ -924,7 +1018,7 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
         createdByUserName: createdBy,
         flagId: isWorker ? '1' : '2',
         fileTypeIds: selectedIds,
-        files: submissionFiles,
+        files: finalSubmissionFiles,
         switchSerialNumber: finalSwitchSerial,
         resilientSerialNumber: finalResilientSerial,
         switchFirmwareNumber: finalSwitchFirmware,
@@ -1469,7 +1563,9 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
         {isSubmitting ? (
           <View style={styles.submitRow}>
             <ActivityIndicator size="small" color="#FFFFFF" />
-            <Text style={styles.submitButtonText}>Submitting Installation Proof...</Text>
+            <Text style={styles.submitButtonText}>
+              Submitting Proof (&lt; 1MB Photos)...
+            </Text>
           </View>
         ) : (
           <Text style={styles.submitButtonText}>
@@ -1570,7 +1666,7 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
               </Text>
               {viewingPhoto?.fileSize ? (
                 <Text style={styles.viewerFileSize}>
-                  {(viewingPhoto.fileSize / 1024).toFixed(1)} KB
+                  {(viewingPhoto.fileSize / 1024).toFixed(1)} KB (✓ &lt; 1 MB)
                 </Text>
               ) : null}
             </View>

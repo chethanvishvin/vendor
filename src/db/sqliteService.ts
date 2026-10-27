@@ -1,6 +1,6 @@
 import { open, DB } from '@op-engineering/op-sqlite';
 import { Platform } from 'react-native';
-import { StationItem, VendorFileType } from '../types';
+import { StationItem, VendorFileType, DEFAULT_FILE_TYPES } from '../types';
 import { Asset } from 'react-native-image-picker';
 import { apiService } from '../api/apiService';
 
@@ -103,6 +103,19 @@ export const getDatabase = async (): Promise<DB> => {
         excelDataId INTEGER NOT NULL,
         vendorId INTEGER NOT NULL,
         remarks TEXT,
+        updatedAt INTEGER,
+        PRIMARY KEY (excelDataId, vendorId)
+      );
+    `);
+
+    // Table for storing captured hardware serial numbers & firmware draft per station
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS station_hardware_draft (
+        excelDataId INTEGER NOT NULL,
+        vendorId INTEGER NOT NULL,
+        switchSerialNumber TEXT,
+        resilientSerialNumber TEXT,
+        switchFirmwareNumber TEXT,
         updatedAt INTEGER,
         PRIMARY KEY (excelDataId, vendorId)
       );
@@ -279,14 +292,25 @@ export const syncPendingStationsToSQLite = async (
  * Retrieve all pending stations stored in SQLite for a specific vendor
  */
 export const getPendingStationsFromSQLite = async (
-  vendorId: number,
+  vendorId?: number,
 ): Promise<StationItem[]> => {
   try {
     const db = await getDatabase();
-    const result = await db.execute(
-      'SELECT jsonData FROM pending_stations WHERE VendorId = ? ORDER BY Station ASC',
-      [vendorId],
-    );
+    let result: any = null;
+    if (vendorId && vendorId > 0) {
+      result = await db.execute(
+        'SELECT jsonData FROM pending_stations WHERE VendorId = ? ORDER BY Station ASC',
+        [vendorId],
+      );
+    }
+
+    // Fallback: If no stations found for specific vendorId (e.g. worker login or vendorId mismatch),
+    // retrieve all pending stations in SQLite so the offline view is never blank
+    if (!result || !result.rows || result.rows.length === 0) {
+      result = await db.execute(
+        'SELECT jsonData FROM pending_stations ORDER BY Station ASC',
+      );
+    }
 
     const list: StationItem[] = [];
     if (result && result.rows) {
@@ -444,46 +468,71 @@ export const saveDraftHardwareDetails = async (
 ): Promise<boolean> => {
   try {
     const db = await getDatabase();
-    const sw = details.switchSerialNumber || '';
-    const res = details.resilientSerialNumber || '';
-    const fw = details.switchFirmwareNumber || '';
     const now = Date.now();
 
-    const existing = await db.execute(
-      'SELECT COUNT(*) as cnt FROM station_proof_drafts WHERE excelDataId = ? AND vendorId = ?',
-      [excelDataId, vendorId],
+    // 1. Fetch current draft values so undefined fields aren't wiped
+    let prevSw = '';
+    let prevRes = '';
+    let prevFw = '';
+
+    try {
+      const existingDraft = await db.execute(
+        'SELECT switchSerialNumber, resilientSerialNumber, switchFirmwareNumber FROM station_hardware_draft WHERE excelDataId = ? AND vendorId = ?',
+        [excelDataId, vendorId],
+      );
+      if (existingDraft && existingDraft.rows && existingDraft.rows.length > 0) {
+        prevSw = (existingDraft.rows[0].switchSerialNumber as string) || '';
+        prevRes = (existingDraft.rows[0].resilientSerialNumber as string) || '';
+        prevFw = (existingDraft.rows[0].switchFirmwareNumber as string) || '';
+      }
+    } catch (_) {}
+
+    if (!prevSw || !prevRes || !prevFw) {
+      try {
+        const prevPhotos = await db.execute(
+          'SELECT switchSerialNumber, resilientSerialNumber, switchFirmwareNumber FROM station_proof_drafts WHERE excelDataId = ? AND vendorId = ? LIMIT 1',
+          [excelDataId, vendorId],
+        );
+        if (prevPhotos && prevPhotos.rows && prevPhotos.rows.length > 0) {
+          if (!prevSw) prevSw = (prevPhotos.rows[0].switchSerialNumber as string) || '';
+          if (!prevRes) prevRes = (prevPhotos.rows[0].resilientSerialNumber as string) || '';
+          if (!prevFw) prevFw = (prevPhotos.rows[0].switchFirmwareNumber as string) || '';
+        }
+      } catch (_) {}
+    }
+
+    const sw = details.switchSerialNumber !== undefined ? details.switchSerialNumber : prevSw;
+    const res = details.resilientSerialNumber !== undefined ? details.resilientSerialNumber : prevRes;
+    const fw = details.switchFirmwareNumber !== undefined ? details.switchFirmwareNumber : prevFw;
+
+    // 2. Persist immediately into dedicated station_hardware_draft table
+    await db.execute(
+      `INSERT OR REPLACE INTO station_hardware_draft (
+        excelDataId,
+        vendorId,
+        switchSerialNumber,
+        resilientSerialNumber,
+        switchFirmwareNumber,
+        updatedAt
+      ) VALUES (?, ?, ?, ?, ?, ?)`,
+      [excelDataId, vendorId, sw, res, fw, now],
     );
 
-    const count =
-      existing && existing.rows && existing.rows.length > 0
-        ? Number(existing.rows[0].cnt || 0)
-        : 0;
+    // 3. Keep station_proof_drafts rows in sync
+    await db.execute(
+      'UPDATE station_proof_drafts SET switchSerialNumber = ?, resilientSerialNumber = ?, switchFirmwareNumber = ?, updatedAt = ? WHERE excelDataId = ? AND vendorId = ?',
+      [sw, res, fw, now, excelDataId, vendorId],
+    );
 
-    if (count > 0) {
+    // 4. Update pending_stations table for immediate offline visibility
+    try {
       await db.execute(
-        'UPDATE station_proof_drafts SET switchSerialNumber = ?, resilientSerialNumber = ?, switchFirmwareNumber = ?, updatedAt = ? WHERE excelDataId = ? AND vendorId = ?',
-        [sw, res, fw, now, excelDataId, vendorId],
+        'UPDATE pending_stations SET SwitchSerialNumber = ?, ResilientSerialNumber = ? WHERE ExcelDataId = ?',
+        [sw, res, excelDataId],
       );
-    } else {
-      await db.execute(
-        `INSERT OR REPLACE INTO station_proof_drafts (
-          excelDataId,
-          vendorId,
-          fileTypeId,
-          fileTypeName,
-          photoUri,
-          fileName,
-          fileType,
-          fileSize,
-          geoTagJson,
-          switchSerialNumber,
-          resilientSerialNumber,
-          switchFirmwareNumber,
-          updatedAt
-        ) VALUES (?, ?, 0, '__hardware_draft__', '', '', '', 0, NULL, ?, ?, ?, ?)`,
-        [excelDataId, vendorId, sw, res, fw, now],
-      );
-    }
+    } catch (_) {}
+
+    console.log(`[SQLite] Cached hardware serials for station ${excelDataId}: Switch=${sw}, Resilient=${res}, FW=${fw}`);
     return true;
   } catch (error) {
     console.error('[SQLite] Error saving draft hardware details:', error);
@@ -539,7 +588,7 @@ export const saveDraftRemarks = async (
 };
 
 /**
- * Retrieve all saved draft photos and remarks for a station
+ * Retrieve all saved draft photos, hardware serials, and remarks for a station
  */
 export const getStationProofDraft = async (
   excelDataId: number,
@@ -555,16 +604,30 @@ export const getStationProofDraft = async (
   try {
     const db = await getDatabase();
 
-    // 1. Get photos and hardware details
+    // 1. Get hardware details from dedicated station_hardware_draft table first
+    let switchSerialNumber = '';
+    let resilientSerialNumber = '';
+    let switchFirmwareNumber = '';
+
+    try {
+      const hwResult = await db.execute(
+        'SELECT switchSerialNumber, resilientSerialNumber, switchFirmwareNumber FROM station_hardware_draft WHERE excelDataId = ? AND vendorId = ?',
+        [excelDataId, vendorId],
+      );
+      if (hwResult && hwResult.rows && hwResult.rows.length > 0) {
+        switchSerialNumber = (hwResult.rows[0].switchSerialNumber as string) || '';
+        resilientSerialNumber = (hwResult.rows[0].resilientSerialNumber as string) || '';
+        switchFirmwareNumber = (hwResult.rows[0].switchFirmwareNumber as string) || '';
+      }
+    } catch (_) {}
+
+    // 2. Get photos and hardware details from photo drafts
     const photoResult = await db.execute(
       'SELECT fileTypeId, fileTypeName, photoUri, fileName, fileType, fileSize, geoTagJson, switchSerialNumber, resilientSerialNumber, switchFirmwareNumber FROM station_proof_drafts WHERE excelDataId = ? AND vendorId = ?',
       [excelDataId, vendorId],
     );
 
     const photos: { [fileTypeId: number]: Asset & { geoTag?: any; taggedUri?: string } } = {};
-    let switchSerialNumber = '';
-    let resilientSerialNumber = '';
-    let switchFirmwareNumber = '';
 
     if (photoResult && photoResult.rows) {
       for (const row of photoResult.rows) {
@@ -599,7 +662,27 @@ export const getStationProofDraft = async (
       }
     }
 
-    // 2. Get remarks
+    // 3. Fallback to pending_stations if hardware serials are not in drafts
+    if (!switchSerialNumber || !resilientSerialNumber) {
+      try {
+        const psRes = await db.execute(
+          'SELECT SwitchSerialNumber, ResilientSerialNumber FROM pending_stations WHERE ExcelDataId = ? LIMIT 1',
+          [excelDataId],
+        );
+        if (psRes && psRes.rows && psRes.rows.length > 0) {
+          if (!switchSerialNumber && psRes.rows[0].SwitchSerialNumber) {
+            const sw = String(psRes.rows[0].SwitchSerialNumber).trim();
+            if (sw && sw !== 'N/A' && sw !== 'NA') switchSerialNumber = sw;
+          }
+          if (!resilientSerialNumber && psRes.rows[0].ResilientSerialNumber) {
+            const res = String(psRes.rows[0].ResilientSerialNumber).trim();
+            if (res && res !== 'N/A' && res !== 'NA') resilientSerialNumber = res;
+          }
+        }
+      } catch (_) {}
+    }
+
+    // 4. Get remarks
     const remarksResult = await db.execute(
       'SELECT remarks FROM station_remarks_draft WHERE excelDataId = ? AND vendorId = ?',
       [excelDataId, vendorId],
@@ -639,7 +722,7 @@ export const getStationProofDraft = async (
 };
 
 /**
- * Clear draft photos and remarks for a station upon successful submission
+ * Clear draft photos, hardware details, and remarks for a station upon successful submission
  */
 export const clearStationProofDraft = async (
   excelDataId: number,
@@ -650,6 +733,10 @@ export const clearStationProofDraft = async (
     await db.transaction(async tx => {
       await tx.execute(
         'DELETE FROM station_proof_drafts WHERE excelDataId = ? AND vendorId = ?',
+        [excelDataId, vendorId],
+      );
+      await tx.execute(
+        'DELETE FROM station_hardware_draft WHERE excelDataId = ? AND vendorId = ?',
         [excelDataId, vendorId],
       );
       await tx.execute(
@@ -718,11 +805,13 @@ export const getCachedFileTypes = async (): Promise<VendorFileType[]> => {
         }
       }
     }
-    return list;
+    if (list.length > 0) {
+      return list;
+    }
   } catch (error) {
     console.error('[SQLite] Error reading cached file types:', error);
-    return [];
   }
+  return DEFAULT_FILE_TYPES;
 };
 
 export interface OfflineSubmissionFile {

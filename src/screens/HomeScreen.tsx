@@ -42,6 +42,7 @@ import {
   getOfflineSubmissionsCount,
   addOfflineQueueListener,
   syncAllOfflineSubmissions,
+  saveCachedFileTypes,
 } from '../db/sqliteService';
 
 interface HomeScreenProps {
@@ -247,6 +248,18 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     setTimeout(async () => {
       try {
         const syncRes = await syncPendingStationsToSQLite(vendorId, stations);
+
+        // Proactively fetch and cache latest dropdown fields in SQLite for offline access
+        try {
+          const latestTypes = isWorker
+            ? await apiService.fetchWorkerInsertDropdown(1)
+            : await apiService.fetchAssignStationDetailDropdown(2);
+          if (latestTypes && latestTypes.length > 0) {
+            await saveCachedFileTypes(latestTypes);
+          }
+        } catch (typesErr) {
+          console.warn('[Sync] Could not cache latest dropdown file types:', typesErr);
+        }
 
         // Also check and trigger offline submissions sync if device has internet
         try {
@@ -520,11 +533,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         setActiveTab('completed');
       }
 
-      if (
-        !hasData &&
-        pendingRes.status === 'rejected' &&
-        completedRes.status === 'rejected'
-      ) {
+      if (!hasData) {
         // Fallback: load pending stations from local SQLite database
         const localPending = await getPendingStationsFromSQLite(vendorId);
         if (localPending.length > 0) {
@@ -532,7 +541,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           setDataResult({
             assignments: [
               {
-                VendorAssignmentId: 0,
+                vendorAssignmentId: 0,
                 stations: localPending,
               } as any,
             ],
@@ -600,6 +609,14 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
 
   // Aggregate stats
   const stats = useMemo(() => {
+    const draftCount = allAssignedStations.filter(
+      s =>
+        s.VendorStatusId === 2 ||
+        (s as any).StatusId === 2 ||
+        s.VendorStatusName === 'Draft' ||
+        (Array.isArray(s.PendingFileTypes) && s.PendingFileTypes.length > 0),
+    ).length;
+
     let assignedTotal = 0;
     let pendingCount = 0;
 
@@ -608,16 +625,47 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         assignedTotal += a.stationCount || a.stations?.length || 0;
         pendingCount += a.pendingStationCount || 0;
       });
+      // Add draft count to pending count so pending includes in-progress drafts
+      pendingCount = Math.max(pendingCount + draftCount, allAssignedStations.length);
     } else {
       assignedTotal = allAssignedStations.length;
-      pendingCount = allAssignedStations.filter(s => s.StatusId !== 3).length;
+      pendingCount = allAssignedStations.length;
     }
 
     const completedCount = completedStations.length;
     const total = Math.max(assignedTotal, completedCount + pendingCount);
 
-    return { total, completed: completedCount, pending: pendingCount };
+    return { total, completed: completedCount, pending: pendingCount, draft: draftCount };
   }, [dataResult, allAssignedStations, completedStations]);
+
+  // Pending display count: always adds draft count into pending so Total = Installed + Pending
+  const pendingDisplayCount = useMemo(() => {
+    const draftCountFromList = allAssignedStations.filter(
+      s =>
+        s.VendorStatusId === 2 ||
+        (s as any).StatusId === 2 ||
+        s.VendorStatusName === 'Draft' ||
+        (Array.isArray(s.PendingFileTypes) && s.PendingFileTypes.length > 0),
+    ).length;
+
+    if (dashboardCounts) {
+      const apiTotal = parseInt(dashboardCounts.TotalAssignedStationCount, 10) || 0;
+      const apiCompleted = parseInt(dashboardCounts.CompletedInstallationCount, 10) || 0;
+      const apiPending = parseInt(dashboardCounts.PendingInstallationCount, 10) || 0;
+
+      // Draft stations are the difference between total assigned and (completed + pure pending)
+      const draftDiff = Math.max(0, apiTotal - apiCompleted - apiPending);
+      const draftToAdd = Math.max(draftDiff, draftCountFromList);
+
+      return String(apiPending + draftToAdd);
+    }
+
+    if (isWorker) {
+      return String(stats.pending);
+    }
+
+    return allAssignedStations.length > 0 ? String(allAssignedStations.length) : '-';
+  }, [dashboardCounts, allAssignedStations, isWorker, stats.pending]);
 
   // Available voltage filters (including standard 66, 110, 220, 400 kV)
   const voltageOptions = useMemo(() => {
@@ -1003,7 +1051,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         <View style={[styles.metricCard, styles.metricCardAmber]}>
           <Text style={styles.metricLabel}>Pending</Text>
           <Text style={styles.metricNumber}>
-            {dashboardCounts?.PendingInstallationCount ?? (isWorker ? stats.pending : '-')}
+            {pendingDisplayCount}
           </Text>
           <Text style={styles.metricSub}>In-Progress</Text>
         </View>
@@ -1024,7 +1072,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               styles.tabNavText,
               activeTab === 'pending' && styles.tabNavTextActive,
             ]}>
-            ⏳ Pending ({dashboardCounts?.PendingInstallationCount ?? allAssignedStations.length})
+            ⏳ Pending ({pendingDisplayCount})
           </Text>
         </TouchableOpacity>
 

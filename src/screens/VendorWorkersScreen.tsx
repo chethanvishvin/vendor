@@ -300,9 +300,9 @@ export const VendorWorkersScreen: React.FC<VendorWorkersScreenProps> = ({
   ) => {
     const options = {
       mediaType: 'photo' as const,
-      quality: 0.8 as const,
-      maxWidth: 1920,
-      maxHeight: 1920,
+      quality: 0.7 as const,
+      maxWidth: 1280,
+      maxHeight: 1280,
       saveToPhotos: false,
     };
 

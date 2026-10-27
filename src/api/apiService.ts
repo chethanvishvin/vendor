@@ -5,6 +5,7 @@ import {
   FetchCompletedStationsResponse,
   FetchDashboardCountResponse,
   VendorFileType,
+  DEFAULT_FILE_TYPES,
   InstallationSubmissionResponse,
   CreateVendorWorkerResponse,
   ChangeVendorWorkerPasswordRequest,
@@ -44,25 +45,26 @@ async function fetchWithFallback(
   path: string,
   options?: RequestInit,
 ): Promise<Response> {
-  const tryFetch = async (baseUrl: string) => {
-    return await fetch(`${baseUrl}${path}`, options);
-  };
-
-  const primaryUrl = ENDPOINTS[activeEndpointIndex];
+  const primaryUrl = ENDPOINTS[activeEndpointIndex] || ENDPOINTS[0];
   try {
-    return await tryFetch(primaryUrl);
+    return await fetch(`${primaryUrl}${path}`, options);
   } catch (err: any) {
-    const altIndex = 1 - activeEndpointIndex;
-    const fallbackUrl = ENDPOINTS[altIndex];
-    try {
-      const response = await tryFetch(fallbackUrl);
-      activeEndpointIndex = altIndex;
-      return response;
-    } catch (fallbackErr: any) {
-      throw new Error(
-        `Network request failed. Unable to connect to backend via ${primaryUrl} or ${fallbackUrl}. Ensure ADB reverse is active or device is connected to LAN.`,
-      );
+    if (ENDPOINTS.length > 1) {
+      const altIndex = (activeEndpointIndex + 1) % ENDPOINTS.length;
+      const fallbackUrl = ENDPOINTS[altIndex];
+      if (fallbackUrl && fallbackUrl !== primaryUrl) {
+        try {
+          const response = await fetch(`${fallbackUrl}${path}`, options);
+          activeEndpointIndex = altIndex;
+          return response;
+        } catch (fallbackErr: any) {
+          // Fallback also failed
+        }
+      }
     }
+    throw new Error(
+      `Network request failed. Unable to connect to backend via ${primaryUrl}. Ensure device is connected to LAN.`,
+    );
   }
 }
 
@@ -254,7 +256,7 @@ export const apiService = {
 
       if (response.ok) {
         const data = await response.json();
-        if (data && (data.status || data.success) && Array.isArray(data.result)) {
+        if (data && (data.status || data.success) && Array.isArray(data.result) && data.result.length > 0) {
           return data.result;
         }
       }
@@ -262,41 +264,37 @@ export const apiService = {
       console.warn('fetchAssignStationDetailDropdown API call failed:', err);
     }
 
-    return [
-      { VendorFileTypeId: 4, VendorFileTypeName: 'RackFile' },
-      { VendorFileTypeId: 5, VendorFileTypeName: 'PointFile' },
-      { VendorFileTypeId: 6, VendorFileTypeName: 'RTU/SASFile' },
-      { VendorFileTypeId: 7, VendorFileTypeName: 'AnnextureFile' },
-      { VendorFileTypeId: 8, VendorFileTypeName: 'LIU OFC Splicing File' },
-    ];
+    return DEFAULT_FILE_TYPES;
   },
 
   async fetchWorkerInsertDropdown(
     flagId: number = 1,
   ): Promise<VendorFileType[]> {
-    const response = await fetchWithFallback(
-      '/vendorWorkerAssign/fetchInsertDpdwn',
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
+    try {
+      const response = await fetchWithFallback(
+        '/vendorWorkerAssign/fetchInsertDpdwn',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          body: JSON.stringify({ flagId }),
         },
-        body: JSON.stringify({ flagId }),
-      },
-    );
+      );
 
-    const data = await response.json();
-    if (data && data.status && Array.isArray(data.result)) {
-      return data.result;
+      const data = await response.json();
+      if (data && data.status && Array.isArray(data.result) && data.result.length > 0) {
+        return data.result;
+      }
+      if (Array.isArray(data.result) && data.result.length > 0) {
+        return data.result;
+      }
+    } catch (err) {
+      console.warn('fetchWorkerInsertDropdown API call failed:', err);
     }
-    if (Array.isArray(data.result)) {
-      return data.result;
-    }
-    if (!response.ok) {
-      throw new Error(data.message || 'Failed to fetch worker photo upload options.');
-    }
-    return data.result || [];
+
+    return DEFAULT_FILE_TYPES;
   },
 
   async insertWorkerStationSubmission(

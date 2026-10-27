@@ -207,6 +207,18 @@ export interface VendorFileType {
   VendorFileTypeName: string;
 }
 
+export const DEFAULT_FILE_TYPES: VendorFileType[] = [
+  { VendorFileTypeId: 6, VendorFileTypeName: 'RTU/SAS Panel Photo' },
+  { VendorFileTypeId: 4, VendorFileTypeName: 'Rack Photo' },
+  { VendorFileTypeId: 8, VendorFileTypeName: 'LIU OFC Splicing Photo' },
+  { VendorFileTypeId: 5, VendorFileTypeName: 'User End Point Photo' },
+  { VendorFileTypeId: 10, VendorFileTypeName: 'NumberingPhoto' },
+  { VendorFileTypeId: 9, VendorFileTypeName: 'Configuration Photo' },
+  { VendorFileTypeId: 7, VendorFileTypeName: 'Annexure-11' },
+  { VendorFileTypeId: 11, VendorFileTypeName: 'SwitchSerialNumber' },
+  { VendorFileTypeId: 12, VendorFileTypeName: 'ResilientSerialNumber' },
+];
+
 export interface FetchAssignStationDetailDpdownResponse {
   status: boolean;
   message: string;
