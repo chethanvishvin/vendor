@@ -1,8 +1,8 @@
 {
-  "versionCode": 7,
-  "versionName": "1.7",
+  "versionCode": 8,
+  "versionName": "1.8",
   "mandatory": true,
-  "releaseNotes": "Vendor app version 1.7",
+  "releaseNotes": "Vendor app version 1.8",
   "apkUrl": "https://github.com/chethanvishvin/vendor/releases/latest/download/vendor-release.apk",
-  "sha256": "a73e3fa2eecca19feefe57fa54829fc5e4173cfd7d2d5f5e9e7172443af5b2cf"
+  "sha256": "6a85cd1e086d8d45c72c644fdef7f5cfb0e188124bc3e5921bcd87efaadb000c"
 }
