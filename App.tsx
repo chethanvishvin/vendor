@@ -40,7 +40,6 @@ export default function App() {
     status: 'UP_TO_DATE',
   });
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
-  const [isDevBypassed, setIsDevBypassed] = useState(false);
 
   // Core update check function: Only checks when internet connection is available
   const runUpdateCheck = useCallback(async (showSplash = false) => {
@@ -205,7 +204,7 @@ export default function App() {
   }
 
   // 2. Mandatory Update Required Gate (Blocks all app navigation & features when mandatory update exists)
-  if (!isDevBypassed && updateResult.status === 'UPDATE_REQUIRED' && updateResult.manifest) {
+  if (updateResult.status === 'UPDATE_REQUIRED' && updateResult.manifest) {
     return (
       <SafeAreaProvider>
         <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
@@ -214,12 +213,7 @@ export default function App() {
             manifest={updateResult.manifest}
             installedInfo={updateResult.installedInfo}
             onUpdateCompleted={() => {
-              if (__DEV__) {
-                setIsDevBypassed(true);
-                setUpdateResult({ status: 'UP_TO_DATE' });
-              } else {
-                runUpdateCheck(false);
-              }
+              runUpdateCheck(false);
             }}
             onRetryCheck={() => runUpdateCheck(true)}
           />
