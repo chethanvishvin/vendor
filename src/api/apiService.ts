@@ -36,8 +36,7 @@ const ENDPOINTS = [
 
 let activeEndpointIndex = 0;
 
-export const getActiveBaseUrl = () => ENDPOINTS[activeEndpointIndex];
-
+export const getActiveBaseUrl = () => ENDPOINTS[activeEndpointIndex]; 333
 // In-memory cache for base64 installation photos
 const imageBase64Cache = new Map<number, string>();
 
@@ -65,6 +64,42 @@ async function fetchWithFallback(
     throw new Error(
       `Network request failed. Unable to connect to backend via ${primaryUrl}. Ensure device is connected to LAN.`,
     );
+  }
+}
+
+async function parseResponseJsonSafe(
+  response: Response,
+  defaultErrorMsg: string,
+): Promise<any> {
+  let text = '';
+  if (typeof response.text === 'function') {
+    text = await response.text();
+  } else if (typeof response.json === 'function') {
+    return await response.json();
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    const preMatch = text.match(/<pre>([\s\S]*?)<\/pre>/i);
+    if (preMatch && preMatch[1]) {
+      const cleanPre = preMatch[1]
+        .replace(/<br\s*[\/]?>/gi, '\n')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&amp;/g, '&')
+        .trim();
+      const firstLine = cleanPre.split('\n')[0].trim();
+      if (firstLine.includes('MulterError: Unexpected field')) {
+        throw new Error(
+          'Backend file limit exceeded: The backend currently only accepts a maximum of 10 files. Please update backend InstallationUpload.js (upload.array limit) to 50 files.',
+        );
+      }
+      throw new Error(firstLine || cleanPre);
+    }
+    if (!response.ok) {
+      throw new Error(`Server error (${response.status}): ${defaultErrorMsg}`);
+    }
+    throw new Error(defaultErrorMsg);
   }
 }
 
@@ -311,7 +346,10 @@ export const apiService = {
       },
     );
 
-    const data = await response.json();
+    const data = await parseResponseJsonSafe(
+      response,
+      'Failed to submit worker station installation.',
+    );
     if (!response.ok || data.status === false) {
       throw new Error(
         data.message || 'Failed to submit worker station installation.',
@@ -362,7 +400,10 @@ export const apiService = {
       } catch (_) { }
     }
 
-    const data = await response.json();
+    const data = await parseResponseJsonSafe(
+      response,
+      'Failed to submit installation proof.',
+    );
     if (!response.ok || (data.status === false || data.success === false)) {
       throw new Error(
         data.message || 'Failed to submit installation proof.',

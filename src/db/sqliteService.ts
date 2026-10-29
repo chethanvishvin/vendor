@@ -83,7 +83,7 @@ export const getDatabase = async (): Promise<DB> => {
       );
     `);
 
-    // Ensure geoTagJson and hardware columns exist in existing tables if created previously
+    // Ensure geoTagJson, hardware, and multi-photo columns exist in existing tables if created previously
     try {
       await db.execute('ALTER TABLE station_proof_drafts ADD COLUMN geoTagJson TEXT;');
     } catch (_) {}
@@ -95,6 +95,9 @@ export const getDatabase = async (): Promise<DB> => {
     } catch (_) {}
     try {
       await db.execute('ALTER TABLE station_proof_drafts ADD COLUMN switchFirmwareNumber TEXT;');
+    } catch (_) {}
+    try {
+      await db.execute('ALTER TABLE station_proof_drafts ADD COLUMN photosJson TEXT;');
     } catch (_) {}
 
     // Table for storing captured remarks draft per station
@@ -380,14 +383,16 @@ export const ensureFileUri = (uri?: string | null): string => {
 };
 
 /**
- * Save or replace captured draft photo immediately in SQLite
+ * Save or replace captured draft photos immediately in SQLite (supports up to 5 photos per category)
  */
 export const saveDraftPhoto = async (
   excelDataId: number,
   vendorId: number,
   fileTypeId: number,
   fileTypeName: string,
-  asset: Asset & { geoTag?: any; taggedUri?: string },
+  assetOrAssets:
+    | (Asset & { geoTag?: any; taggedUri?: string })
+    | (Asset & { geoTag?: any; taggedUri?: string })[],
   hardwareDetails?: {
     switchSerialNumber?: string;
     resilientSerialNumber?: string;
@@ -396,8 +401,19 @@ export const saveDraftPhoto = async (
 ): Promise<boolean> => {
   try {
     const db = await getDatabase();
-    const safeUri = ensureFileUri(asset.taggedUri || asset.uri);
-    const geoTagJson = asset.geoTag ? JSON.stringify(asset.geoTag) : null;
+    const assets: (Asset & { geoTag?: any; taggedUri?: string })[] = Array.isArray(assetOrAssets)
+      ? assetOrAssets
+      : [assetOrAssets];
+
+    if (assets.length === 0) {
+      return removeDraftPhoto(excelDataId, vendorId, fileTypeId);
+    }
+
+    const firstAsset = assets[0];
+    const safeUri = ensureFileUri(firstAsset.taggedUri || firstAsset.uri);
+    const geoTagJson = firstAsset.geoTag ? JSON.stringify(firstAsset.geoTag) : null;
+    const photosJson = JSON.stringify(assets);
+
     let finalSw = hardwareDetails?.switchSerialNumber ?? null;
     let finalRes = hardwareDetails?.resilientSerialNumber ?? null;
     let finalFw = hardwareDetails?.switchFirmwareNumber ?? null;
@@ -428,25 +444,27 @@ export const saveDraftPhoto = async (
         switchSerialNumber,
         resilientSerialNumber,
         switchFirmwareNumber,
+        photosJson,
         updatedAt
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         excelDataId,
         vendorId,
         fileTypeId,
         fileTypeName || '',
         safeUri,
-        asset.fileName || `proof_${fileTypeId}.jpg`,
-        asset.type || 'image/jpeg',
-        asset.fileSize || 0,
+        firstAsset.fileName || `proof_${fileTypeId}.jpg`,
+        firstAsset.type || 'image/jpeg',
+        firstAsset.fileSize || 0,
         geoTagJson,
         finalSw || '',
         finalRes || '',
         finalFw || '',
+        photosJson,
         Date.now(),
       ],
     );
-    console.log(`[SQLite] Saved photo draft for station ${excelDataId}, fileType ${fileTypeId}`);
+    console.log(`[SQLite] Saved photo draft (${assets.length} photos) for station ${excelDataId}, fileType ${fileTypeId}`);
     return true;
   } catch (error) {
     console.error('[SQLite] Error saving draft photo:', error);
@@ -594,7 +612,7 @@ export const getStationProofDraft = async (
   excelDataId: number,
   vendorId: number,
 ): Promise<{
-  photos: { [fileTypeId: number]: Asset & { geoTag?: any; taggedUri?: string } };
+  photos: { [fileTypeId: number]: (Asset & { geoTag?: any; taggedUri?: string })[] };
   remarks: string;
   switchSerialNumber: string;
   resilientSerialNumber: string;
@@ -623,11 +641,11 @@ export const getStationProofDraft = async (
 
     // 2. Get photos and hardware details from photo drafts
     const photoResult = await db.execute(
-      'SELECT fileTypeId, fileTypeName, photoUri, fileName, fileType, fileSize, geoTagJson, switchSerialNumber, resilientSerialNumber, switchFirmwareNumber FROM station_proof_drafts WHERE excelDataId = ? AND vendorId = ?',
+      'SELECT fileTypeId, fileTypeName, photoUri, fileName, fileType, fileSize, geoTagJson, switchSerialNumber, resilientSerialNumber, switchFirmwareNumber, photosJson FROM station_proof_drafts WHERE excelDataId = ? AND vendorId = ?',
       [excelDataId, vendorId],
     );
 
-    const photos: { [fileTypeId: number]: Asset & { geoTag?: any; taggedUri?: string } } = {};
+    const photos: { [fileTypeId: number]: (Asset & { geoTag?: any; taggedUri?: string })[] } = {};
 
     if (photoResult && photoResult.rows) {
       for (const row of photoResult.rows) {
@@ -642,22 +660,47 @@ export const getStationProofDraft = async (
         }
 
         const fid = Number(row.fileTypeId);
-        if (fid > 0 && row.photoUri) {
-          let geoTag = undefined;
-          if (row.geoTagJson && typeof row.geoTagJson === 'string') {
+        if (fid > 0) {
+          let parsedAssets: (Asset & { geoTag?: any; taggedUri?: string })[] = [];
+
+          // Try parsing multiple photos array from photosJson column
+          if (row.photosJson && typeof row.photosJson === 'string') {
             try {
-              geoTag = JSON.parse(row.geoTagJson);
+              const parsed = JSON.parse(row.photosJson);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                parsedAssets = parsed.map(item => ({
+                  ...item,
+                  uri: ensureFileUri(item.taggedUri || item.uri),
+                  taggedUri: item.taggedUri ? ensureFileUri(item.taggedUri) : ensureFileUri(item.uri),
+                }));
+              }
             } catch (_) {}
           }
-          const safeUri = ensureFileUri(row.photoUri as string);
-          photos[fid] = {
-            uri: safeUri,
-            taggedUri: safeUri,
-            geoTag,
-            fileName: (row.fileName as string) || `proof_${fid}.jpg`,
-            type: (row.fileType as string) || 'image/jpeg',
-            fileSize: Number(row.fileSize || 0),
-          };
+
+          // Fallback to legacy single photoUri if photosJson was not present or empty
+          if (parsedAssets.length === 0 && row.photoUri) {
+            let geoTag = undefined;
+            if (row.geoTagJson && typeof row.geoTagJson === 'string') {
+              try {
+                geoTag = JSON.parse(row.geoTagJson);
+              } catch (_) {}
+            }
+            const safeUri = ensureFileUri(row.photoUri as string);
+            parsedAssets = [
+              {
+                uri: safeUri,
+                taggedUri: safeUri,
+                geoTag,
+                fileName: (row.fileName as string) || `proof_${fid}.jpg`,
+                type: (row.fileType as string) || 'image/jpeg',
+                fileSize: Number(row.fileSize || 0),
+              },
+            ];
+          }
+
+          if (parsedAssets.length > 0) {
+            photos[fid] = parsedAssets;
+          }
         }
       }
     }

@@ -56,13 +56,15 @@ interface TaggedAsset extends Asset {
 }
 
 interface SelectedFileMap {
-  [fileTypeId: number]: TaggedAsset;
+  [fileTypeId: number]: TaggedAsset[];
 }
 
 interface ViewingPhotoInfo {
   uri: string;
   typeName: string;
   fileTypeId: number;
+  photoIndex?: number;
+  totalPhotos?: number;
   fileName?: string;
   fileSize?: number;
   geoTag?: GeoTag;
@@ -292,19 +294,21 @@ export const buildAutomaticRemarks = (
   }[] = [];
 
   for (const key of fileKeys) {
-    const asset = selectedFiles[key];
-    if (asset?.geoTag) {
-      const distance = hasSubCoords
-        ? calculateDistanceMeters(subLat, subLon, asset.geoTag.latitude, asset.geoTag.longitude)
-        : null;
-      photoPoints.push({
-        fileTypeId: key,
-        lat: asset.geoTag.latitude,
-        lon: asset.geoTag.longitude,
-        distance,
-        isWithin: distance !== null ? distance <= 300 : false,
-        address: asset.geoTag.address,
-      });
+    const assets = selectedFiles[key] || [];
+    for (const asset of assets) {
+      if (asset?.geoTag) {
+        const distance = hasSubCoords
+          ? calculateDistanceMeters(subLat, subLon, asset.geoTag.latitude, asset.geoTag.longitude)
+          : null;
+        photoPoints.push({
+          fileTypeId: key,
+          lat: asset.geoTag.latitude,
+          lon: asset.geoTag.longitude,
+          distance,
+          isWithin: distance !== null ? distance <= 300 : false,
+          address: asset.geoTag.address,
+        });
+      }
     }
   }
 
@@ -546,7 +550,8 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
   const subLon = parseFloat(String(station.Longitude || '').trim());
   const hasSubCoords = !isNaN(subLat) && !isNaN(subLon) && (subLat !== 0 || subLon !== 0);
 
-  const attachedPhotosWithGeo = Object.values(selectedFiles).filter(f => !!f.geoTag);
+  const allAttachedAssets = Object.values(selectedFiles).flat();
+  const attachedPhotosWithGeo = allAttachedAssets.filter(f => !!f?.geoTag);
   const overallDistances = attachedPhotosWithGeo
     .map(f =>
       hasSubCoords
@@ -566,8 +571,18 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
     let isMounted = true;
     getStationProofDraft(station.ExcelDataId, currentVendor.VendorId).then(draft => {
       if (isMounted && draft.hasDraft) {
-        if (Object.keys(draft.photos).length > 0) {
-          setSelectedFiles(draft.photos);
+        if (draft.photos && Object.keys(draft.photos).length > 0) {
+          const normalized: SelectedFileMap = {};
+          Object.keys(draft.photos).forEach(key => {
+            const fid = Number(key);
+            const val = (draft.photos as any)[fid];
+            if (Array.isArray(val)) {
+              normalized[fid] = val;
+            } else if (val && typeof val === 'object') {
+              normalized[fid] = [val];
+            }
+          });
+          setSelectedFiles(normalized);
         }
         // Restore cached Switch Serial Number and Resilient Serial Number from SQLite draft
         if (draft.switchSerialNumber && draft.switchSerialNumber.trim().length > 0) {
@@ -725,6 +740,15 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
   };
 
   const handleTakePhoto = async (type: VendorFileType) => {
+    const existingPhotos = selectedFiles[type.VendorFileTypeId] || [];
+    if (existingPhotos.length >= 5) {
+      Alert.alert(
+        'Maximum Limit Reached (5/5)',
+        'You have already attached the maximum of 5 photos for this proof category. Please remove an existing photo if you wish to take another.',
+      );
+      return;
+    }
+
     const hasPermission = await requestCameraPermission();
     if (!hasPermission) {
       Alert.alert('Permission Denied', 'Camera permission is required to take photos.');
@@ -799,15 +823,18 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
           }
 
           setSelectedFiles(prev => {
-            const updatedFiles = { ...prev, [type.VendorFileTypeId]: taggedAsset };
+            const prevList = prev[type.VendorFileTypeId] || [];
+            if (prevList.length >= 5) return prev;
+            const updatedList = [...prevList, taggedAsset];
+            const updatedFiles = { ...prev, [type.VendorFileTypeId]: updatedList };
 
-            // Save geo-tagged version to SQLite draft (with embedded address & time & hardware serials)
+            // Save geo-tagged versions array to SQLite draft (with embedded address & time & hardware serials)
             saveDraftPhoto(
               station.ExcelDataId,
               currentVendor.VendorId,
               type.VendorFileTypeId,
               type.VendorFileTypeName,
-              taggedAsset,
+              updatedList,
               {
                 switchSerialNumber,
                 resilientSerialNumber,
@@ -828,17 +855,67 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
     });
   };
 
-  const handleRemoveFile = (fileTypeId: number) => {
+  const handleRemoveSinglePhoto = (fileTypeId: number, photoIndexToRemove: number) => {
     setSelectedFiles(prev => {
+      const currentList = prev[fileTypeId] || [];
+      const updatedList = currentList.filter((_, idx) => idx !== photoIndexToRemove);
       const updated = { ...prev };
-      delete updated[fileTypeId];
-      // Automatically update background remarks in SQLite draft
+
+      if (updatedList.length === 0) {
+        delete updated[fileTypeId];
+        removeDraftPhoto(station.ExcelDataId, currentVendor.VendorId, fileTypeId);
+      } else {
+        updated[fileTypeId] = updatedList;
+        const matchedType = sortedFileTypes.find(t => t.VendorFileTypeId === fileTypeId);
+        saveDraftPhoto(
+          station.ExcelDataId,
+          currentVendor.VendorId,
+          fileTypeId,
+          matchedType?.VendorFileTypeName || `File #${fileTypeId}`,
+          updatedList,
+          {
+            switchSerialNumber,
+            resilientSerialNumber,
+            switchFirmwareNumber,
+          },
+        );
+      }
+
       const autoRemarks = buildAutomaticRemarks(station, updated);
       saveDraftRemarks(station.ExcelDataId, currentVendor.VendorId, autoRemarks);
       return updated;
     });
-    // Immediately remove from SQLite database
-    removeDraftPhoto(station.ExcelDataId, currentVendor.VendorId, fileTypeId);
+
+    if (viewingPhoto && viewingPhoto.fileTypeId === fileTypeId) {
+      setViewingPhoto(null);
+    }
+  };
+
+  const handleRemoveFile = (fileTypeId: number) => {
+    Alert.alert(
+      'Remove Photos',
+      'Are you sure you want to remove all photos attached to this category?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove All',
+          style: 'destructive',
+          onPress: () => {
+            setSelectedFiles(prev => {
+              const updated = { ...prev };
+              delete updated[fileTypeId];
+              const autoRemarks = buildAutomaticRemarks(station, updated);
+              saveDraftRemarks(station.ExcelDataId, currentVendor.VendorId, autoRemarks);
+              return updated;
+            });
+            removeDraftPhoto(station.ExcelDataId, currentVendor.VendorId, fileTypeId);
+            if (viewingPhoto && viewingPhoto.fileTypeId === fileTypeId) {
+              setViewingPhoto(null);
+            }
+          },
+        },
+      ],
+    );
   };
 
   const performSubmission = async (selectedIds: number[]) => {
@@ -847,14 +924,18 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
     try {
       // 1. Prepare structured file items (use geo-tagged URI if available, guaranteed < 1 MB)
       const finalSubmissionFiles: OfflineSubmissionFile[] = [];
+      const submissionFileTypeIds: number[] = [];
+
       for (const fileTypeId of selectedIds) {
-        const asset = selectedFiles[fileTypeId];
-        if (asset) {
+        const assets = selectedFiles[fileTypeId] || [];
+        const matchedType = sortedFileTypes.find(t => t.VendorFileTypeId === fileTypeId);
+
+        for (let idx = 0; idx < assets.length; idx++) {
+          const asset = assets[idx];
           let fileUri = asset.taggedUri || asset.uri;
           if (!fileUri) continue;
-          const matchedType = sortedFileTypes.find(t => t.VendorFileTypeId === fileTypeId);
           const fileExtension = asset.fileName ? asset.fileName.split('.').pop() : 'jpg';
-          const fileName = `proof_${fileTypeId}_${Date.now()}.${fileExtension || 'jpg'}`;
+          const fileName = `proof_${fileTypeId}_${idx + 1}_${Date.now()}.${fileExtension || 'jpg'}`;
           let fileSize = asset.fileSize || 250 * 1024;
 
           // Extreme safeguard: If any photo somehow exceeds 1 MB, recompress sequentially
@@ -872,6 +953,7 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
             fileTypeName: matchedType?.VendorFileTypeName || `File #${fileTypeId}`,
             size: fileSize,
           });
+          submissionFileTypeIds.push(fileTypeId);
         }
       }
 
@@ -939,8 +1021,8 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
             formData.append('SwitchSerialNumber', finalSwitchSerial);
             formData.append('ResilientSerialNumber', finalResilientSerial);
             formData.append('CreatedByUserName', createdBy);
-            formData.append('FileTypeIds', JSON.stringify(selectedIds));
-            formData.append('FileTypeId', JSON.stringify(selectedIds));
+            formData.append('FileTypeIds', JSON.stringify(submissionFileTypeIds));
+            formData.append('FileTypeId', JSON.stringify(submissionFileTypeIds));
           } else {
             // Vendor station submission to /assignVendor/createInstallationSubmission
             formData.append('ExcelDataId', String(station.ExcelDataId));
@@ -951,8 +1033,8 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
             formData.append('Remarks', submissionRemarks);
             formData.append('CreatedByUserName', createdBy);
             formData.append('flagId', '2');
-            formData.append('FileTypeId', JSON.stringify(selectedIds));
-            formData.append('FileTypeIds', JSON.stringify(selectedIds));
+            formData.append('FileTypeId', JSON.stringify(submissionFileTypeIds));
+            formData.append('FileTypeIds', JSON.stringify(submissionFileTypeIds));
             formData.append('SwitchSerialNumber', finalSwitchSerial);
             formData.append('ResilientSerialNumber', finalResilientSerial);
             formData.append('SwitchFirmWareNumber', finalSwitchFirmware);
@@ -1017,7 +1099,7 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
         remarks: submissionRemarks,
         createdByUserName: createdBy,
         flagId: isWorker ? '1' : '2',
-        fileTypeIds: selectedIds,
+        fileTypeIds: submissionFileTypeIds,
         files: finalSubmissionFiles,
         switchSerialNumber: finalSwitchSerial,
         resilientSerialNumber: finalResilientSerial,
@@ -1064,21 +1146,23 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
       return;
     }
 
-    const selectedIds = Object.keys(selectedFiles).map(id => Number(id));
+    const selectedIds = Object.keys(selectedFiles)
+      .map(id => Number(id))
+      .filter(id => (selectedFiles[id] || []).length > 0);
     const hasAnyPhoto = selectedIds.length > 0;
 
     // 1. Strict binding check: Switch Serial Number and its photo MUST be submitted together
     const switchFileType = sortedFileTypes.find(isSwitchSerialType);
     const hasSwitchPhotoInPending = Boolean(switchFileType);
     const hasSwitchPhotoSelected = Boolean(
-      switchFileType && selectedFiles[switchFileType.VendorFileTypeId],
+      switchFileType && (selectedFiles[switchFileType.VendorFileTypeId] || []).length > 0,
     );
 
     // 2. Strict binding check: Resilient Serial Number and its photo MUST be submitted together
     const resilientFileType = sortedFileTypes.find(isResilientSerialType);
     const hasResilientPhotoInPending = Boolean(resilientFileType);
     const hasResilientPhotoSelected = Boolean(
-      resilientFileType && selectedFiles[resilientFileType.VendorFileTypeId],
+      resilientFileType && (selectedFiles[resilientFileType.VendorFileTypeId] || []).length > 0,
     );
 
     const hasAnyHardware =
@@ -1135,7 +1219,7 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
     // 3. Annexure-11 check: Annexure-11 should ONLY get submitted when all fields and photos are submitted / getting submitted
     const annexureFileType = sortedFileTypes.find(isAnnexure11Type);
     const hasAnnexureSelected = Boolean(
-      annexureFileType && selectedFiles[annexureFileType.VendorFileTypeId],
+      annexureFileType && (selectedFiles[annexureFileType.VendorFileTypeId] || []).length > 0,
     );
 
     if (hasAnnexureSelected) {
@@ -1144,7 +1228,7 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
       // Check all other photo types in sortedFileTypes
       sortedFileTypes.forEach(t => {
         if (!isAnnexure11Type(t)) {
-          if (!selectedFiles[t.VendorFileTypeId]) {
+          if ((selectedFiles[t.VendorFileTypeId] || []).length === 0) {
             missingForAnnexure.push(`• Photo: ${t.VendorFileTypeName} (#${t.VendorFileTypeId})`);
           }
         }
@@ -1200,9 +1284,15 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
   const hasSwitchInPending = sortedFileTypes.some(isSwitchSerialType);
   const hasResilientInPending = sortedFileTypes.some(isResilientSerialType);
 
-  const uploadedCount = Object.keys(selectedFiles).length;
+  const uploadedCategoryCount = Object.keys(selectedFiles).filter(
+    id => (selectedFiles[Number(id)] || []).length > 0,
+  ).length;
+  const totalPhotosCount = Object.values(selectedFiles).reduce(
+    (sum, list) => sum + (list?.length || 0),
+    0,
+  );
   const totalCount = sortedFileTypes.length;
-  const hasAnyPhoto = uploadedCount > 0;
+  const hasAnyPhoto = totalPhotosCount > 0;
   const hasAnyHardware =
     (hasSwitchInPending && Boolean(switchSerialNumber.trim())) ||
     (hasResilientInPending && Boolean(resilientSerialNumber.trim())) ||
@@ -1216,7 +1306,7 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
           <Text style={styles.sectionTitle}>📸 Installation Proof Upload</Text>
           <View style={styles.progressBadge}>
             <Text style={styles.progressText}>
-              {uploadedCount} / {totalCount} Attached
+              {uploadedCategoryCount} / {totalCount} Attached • {totalPhotosCount} Photo{totalPhotosCount !== 1 ? 's' : ''}
             </Text>
           </View>
         </View>
@@ -1250,37 +1340,16 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
       ) : (
         <View style={styles.typesList}>
           {sortedFileTypes.map(type => {
-            const file = selectedFiles[type.VendorFileTypeId];
-            const isUploaded = !!file;
+            const photoList = selectedFiles[type.VendorFileTypeId] || [];
+            const photoCount = photoList.length;
+            const isUploaded = photoCount > 0;
+            const canAddMore = photoCount < 5;
             const isTagging = geoTaggingId === type.VendorFileTypeId;
-            const displayUri = ensureFileUri(file?.taggedUri || file?.uri);
-            const photoProximity = file?.geoTag
-              ? checkSubstationProximity(
-                  station.Latitude,
-                  station.Longitude,
-                  file.geoTag.latitude,
-                  file.geoTag.longitude,
-                )
-              : null;
 
             const isSwitchCard = isSwitchSerialType(type);
             const isResilientCard = isResilientSerialType(type);
             const isBoundHardwareCard = isSwitchCard || isResilientCard;
             const isAnnexureCard = isAnnexure11Type(type);
-
-            const handleOpenModal = () => {
-              if (!displayUri || !file) return;
-              setViewingPhoto({
-                uri: displayUri,
-                typeName: type.VendorFileTypeName,
-                fileTypeId: type.VendorFileTypeId,
-                fileName: file.fileName,
-                fileSize: file.fileSize,
-                geoTag: file.geoTag,
-                distanceMeters: photoProximity?.distanceMeters,
-                isWithin300m: photoProximity?.isWithin300m,
-              });
-            };
 
             return (
               <View
@@ -1311,20 +1380,30 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
                         styles.statusPill,
                         isTagging
                           ? styles.statusPillTagging
-                          : isUploaded
-                            ? styles.statusPillUploaded
-                            : styles.statusPillPending,
+                          : photoCount === 5
+                            ? styles.statusPillMax
+                            : isUploaded
+                              ? styles.statusPillUploaded
+                              : styles.statusPillPending,
                       ]}>
                       <Text
                         style={[
                           styles.statusPillText,
                           isTagging
                             ? styles.statusTextTagging
-                            : isUploaded
-                              ? styles.statusTextUploaded
-                              : styles.statusTextPending,
+                            : photoCount === 5
+                              ? styles.statusTextMax
+                              : isUploaded
+                                ? styles.statusTextUploaded
+                                : styles.statusTextPending,
                         ]}>
-                        {isTagging ? '🛰️ Geo-Tagging...' : isUploaded ? '✓ Attached' : 'Pending'}
+                        {isTagging
+                          ? '🛰️ Geo-Tagging...'
+                          : photoCount === 5
+                            ? '✓ 5/5 Photos (Max)'
+                            : isUploaded
+                              ? `✓ ${photoCount}/5 Attached`
+                              : 'Pending (0/5)'}
                       </Text>
                     </View>
                   </View>
@@ -1376,77 +1455,128 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
 
                     <View style={styles.boundPhotoSectionDivider}>
                       <Text style={styles.boundPhotoSectionTitle}>
-                        📷 {isSwitchCard ? 'Switch' : 'Resilient'} Serial Number Photo Proof
+                        📷 {isSwitchCard ? 'Switch' : 'Resilient'} Serial Number Photo Proof ({photoCount}/5)
                       </Text>
                     </View>
                   </View>
                 )}
 
-                {/* Photo Capture / Preview Container */}
-                {isTagging ? (
+                {/* Photo Thumbnails & Controls */}
+                {photoCount > 0 && (
+                  <View style={styles.multiPhotosContainer}>
+                    <View style={styles.multiPhotoHeaderRow}>
+                      <Text style={styles.multiPhotoSubHeader}>
+                        Attached Photos ({photoCount}/5):
+                      </Text>
+                      {photoCount > 1 && (
+                        <TouchableOpacity
+                          onPress={() => handleRemoveFile(type.VendorFileTypeId)}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                          <Text style={styles.clearAllPhotosLink}>Clear All</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+
+                    <View style={styles.multiPhotoGrid}>
+                      {photoList.map((photo, pIdx) => {
+                        const displayUri = ensureFileUri(photo.taggedUri || photo.uri);
+                        const photoProximity = photo.geoTag
+                          ? checkSubstationProximity(
+                              station.Latitude,
+                              station.Longitude,
+                              photo.geoTag.latitude,
+                              photo.geoTag.longitude,
+                            )
+                          : null;
+
+                        const handleOpenPhoto = () => {
+                          setViewingPhoto({
+                            uri: displayUri,
+                            typeName: type.VendorFileTypeName,
+                            fileTypeId: type.VendorFileTypeId,
+                            photoIndex: pIdx + 1,
+                            totalPhotos: photoCount,
+                            fileName: photo.fileName,
+                            fileSize: photo.fileSize,
+                            geoTag: photo.geoTag,
+                            distanceMeters: photoProximity?.distanceMeters,
+                            isWithin300m: photoProximity?.isWithin300m,
+                          });
+                        };
+
+                        return (
+                          <View key={pIdx} style={styles.multiPhotoItemWrap}>
+                            <TouchableOpacity
+                              style={styles.multiPhotoTouchable}
+                              activeOpacity={0.8}
+                              onPress={handleOpenPhoto}>
+                              <Image
+                                source={{ uri: displayUri }}
+                                style={styles.multiPhotoThumb}
+                                resizeMode="cover"
+                              />
+                              <View style={styles.multiPhotoIndexBadge}>
+                                <Text style={styles.multiPhotoIndexText}>#{pIdx + 1}</Text>
+                              </View>
+                              <View style={styles.multiPhotoViewBadge}>
+                                <Text style={styles.multiPhotoViewText}>🔍</Text>
+                              </View>
+                              {photo.geoTag && (
+                                <View style={styles.multiPhotoGeoTagPill}>
+                                  <Text style={styles.multiPhotoGeoTagText}>📍 GPS</Text>
+                                </View>
+                              )}
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                              style={styles.multiPhotoDeleteBtn}
+                              onPress={() => handleRemoveSinglePhoto(type.VendorFileTypeId, pIdx)}
+                              activeOpacity={0.7}
+                              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+                              <Text style={styles.multiPhotoDeleteBtnText}>✕</Text>
+                            </TouchableOpacity>
+
+                            <Text style={styles.multiPhotoSizeLabel}>
+                              {photo.fileSize ? `${(photo.fileSize / 1024).toFixed(0)} KB` : `#${pIdx + 1}`}
+                            </Text>
+                          </View>
+                        );
+                      })}
+                    </View>
+                  </View>
+                )}
+
+                {/* Geo-tagging in progress indicator */}
+                {isTagging && (
                   <View style={styles.geoTaggingOverlay}>
                     <ActivityIndicator size="small" color="#7C3AED" />
                     <Text style={styles.geoTaggingText}>Getting GPS &amp; stamping photo...</Text>
                   </View>
-                ) : isUploaded && displayUri ? (
-                  <View style={styles.previewContainer}>
-                    <TouchableOpacity
-                      style={styles.previewImageTouchable}
-                      activeOpacity={0.8}
-                      onPress={handleOpenModal}>
-                      <Image
-                        source={{ uri: displayUri }}
-                        style={styles.previewImage}
-                        resizeMode="cover"
-                        onError={e => console.warn('Preview image load error:', e.nativeEvent.error)}
-                      />
-                      <View style={styles.viewBadge}>
-                        <Text style={styles.viewBadgeText}>🔍 View</Text>
-                      </View>
-                      {file.geoTag && (
-                        <View style={styles.geoTagStampOverlay}>
-                          <Text style={styles.geoTagStampText}>📍 Geo-Tagged</Text>
-                        </View>
-                      )}
-                    </TouchableOpacity>
-                    <View style={styles.previewMeta}>
-                      <Text style={styles.fileNameText} numberOfLines={1}>
-                        {file.fileName || `${type.VendorFileTypeName}.jpg`}
-                      </Text>
-                      {file.fileSize ? (
-                        <Text style={styles.fileSizeText}>
-                          {(file.fileSize / 1024).toFixed(1)} KB
+                )}
+
+                {/* Photo Action Button (Take / Add Photo) */}
+                {!isTagging && (
+                  <View style={styles.photoActionsRow}>
+                    {canAddMore ? (
+                      <TouchableOpacity
+                        style={[
+                          styles.actionBtnCamera,
+                          photoCount > 0 ? styles.actionBtnAddMore : null,
+                        ]}
+                        onPress={() => handleTakePhoto(type)}
+                        activeOpacity={0.75}>
+                        <Text style={styles.actionBtnCameraText}>
+                          {photoCount === 0 ? '📷 Take Photo (0/5)' : `📷 + Add Photo (${photoCount}/5)`}
                         </Text>
-                      ) : null}
-                      <View style={styles.fileActionRow}>
-                        <TouchableOpacity
-                          style={styles.viewBtn}
-                          onPress={handleOpenModal}
-                          activeOpacity={0.7}>
-                          <Text style={styles.viewBtnText}>👁️ View Photo</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={styles.changeBtn}
-                          onPress={() => handleTakePhoto(type)}
-                          activeOpacity={0.7}>
-                          <Text style={styles.changeBtnText}>📷 Retake</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={styles.removeBtn}
-                          onPress={() => handleRemoveFile(type.VendorFileTypeId)}
-                          activeOpacity={0.7}>
-                          <Text style={styles.removeBtnText}>✕ Remove</Text>
-                        </TouchableOpacity>
+                      </TouchableOpacity>
+                    ) : (
+                      <View style={styles.maxPhotosBanner}>
+                        <Text style={styles.maxPhotosBannerText}>
+                          ✓ Maximum 5 Photos Added (5/5)
+                        </Text>
                       </View>
-                    </View>
+                    )}
                   </View>
-                ) : (
-                  <TouchableOpacity
-                    style={styles.actionBtnCamera}
-                    onPress={() => handleTakePhoto(type)}
-                    activeOpacity={0.75}>
-                    <Text style={styles.actionBtnCameraText}>📷 Take Photo</Text>
-                  </TouchableOpacity>
                 )}
               </View>
             );
@@ -1545,7 +1675,7 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
           <Text style={styles.autoAuditNoteText}>
             🤖 Audit remarks are generated and validated automatically in the background.
           </Text>
-          {uploadedCount > 0 && (
+          {uploadedCategoryCount > 0 && (
             <Text style={styles.autoAuditSavedText}>✓ SQLite Auto-Draft</Text>
           )}
         </View>
@@ -1570,8 +1700,8 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
         ) : (
           <Text style={styles.submitButtonText}>
             {isDraftStation
-              ? `📤 Submit Draft Progress (${uploadedCount}/${totalCount} Photos)`
-              : `📤 Submit Installation Proof (${uploadedCount}/${totalCount})`}
+              ? `📤 Submit Draft Progress (${uploadedCategoryCount}/${totalCount} Categories • ${totalPhotosCount} Photos)`
+              : `📤 Submit Installation Proof (${uploadedCategoryCount}/${totalCount} Categories • ${totalPhotosCount} Photos)`}
           </Text>
         )}
       </TouchableOpacity>
@@ -1591,6 +1721,7 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
               </Text>
               <Text style={styles.viewerSubtitle} numberOfLines={1}>
                 {station.Station} • #{viewingPhoto?.fileTypeId}
+                {viewingPhoto?.photoIndex ? ` (Photo ${viewingPhoto.photoIndex} of ${viewingPhoto.totalPhotos})` : ''}
               </Text>
             </View>
             <TouchableOpacity
@@ -1671,12 +1802,26 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
               ) : null}
             </View>
 
-            <TouchableOpacity
-              style={styles.viewerDismissButton}
-              onPress={() => setViewingPhoto(null)}
-              activeOpacity={0.85}>
-              <Text style={styles.viewerDismissButtonText}>Done Viewing</Text>
-            </TouchableOpacity>
+            <View style={styles.viewerModalActionsRow}>
+              <TouchableOpacity
+                style={styles.viewerDeleteBtn}
+                onPress={() => {
+                  if (viewingPhoto) {
+                    const fid = viewingPhoto.fileTypeId;
+                    const pIdx = viewingPhoto.photoIndex ? viewingPhoto.photoIndex - 1 : 0;
+                    handleRemoveSinglePhoto(fid, pIdx);
+                  }
+                }}
+                activeOpacity={0.85}>
+                <Text style={styles.viewerDeleteBtnText}>🗑️ Delete Photo</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.viewerDismissButton}
+                onPress={() => setViewingPhoto(null)}
+                activeOpacity={0.85}>
+                <Text style={styles.viewerDismissButtonText}>Done Viewing</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>
@@ -1793,6 +1938,9 @@ const styles = StyleSheet.create({
   statusPillUploaded: {
     backgroundColor: '#DCFCE7',
   },
+  statusPillMax: {
+    backgroundColor: '#D1FAE5',
+  },
   statusPillTagging: {
     backgroundColor: '#EDE9FE',
   },
@@ -1805,6 +1953,9 @@ const styles = StyleSheet.create({
   },
   statusTextUploaded: {
     color: '#15803D',
+  },
+  statusTextMax: {
+    color: '#065F46',
   },
   statusTextTagging: {
     color: '#6D28D9',
@@ -2092,18 +2243,168 @@ const styles = StyleSheet.create({
     color: '#CBD5E1',
     marginLeft: 8,
   },
+  viewerModalActionsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 6,
+  },
+  viewerDeleteBtn: {
+    flex: 1,
+    backgroundColor: '#DC2626',
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  viewerDeleteBtnText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
   viewerDismissButton: {
+    flex: 1,
     backgroundColor: '#2563EB',
     paddingVertical: 12,
     borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 4,
   },
   viewerDismissButtonText: {
     fontSize: 14,
     fontWeight: '700',
     color: '#FFFFFF',
+  },
+  multiPhotosContainer: {
+    marginTop: 6,
+    marginBottom: 8,
+  },
+  multiPhotoHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  multiPhotoSubHeader: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#475569',
+  },
+  clearAllPhotosLink: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#EF4444',
+  },
+  multiPhotoGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  multiPhotoItemWrap: {
+    position: 'relative',
+    width: 76,
+    alignItems: 'center',
+  },
+  multiPhotoTouchable: {
+    width: 76,
+    height: 76,
+    borderRadius: 8,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    backgroundColor: '#F1F5F9',
+  },
+  multiPhotoThumb: {
+    width: 76,
+    height: 76,
+  },
+  multiPhotoIndexBadge: {
+    position: 'absolute',
+    top: 3,
+    left: 3,
+    backgroundColor: 'rgba(15, 23, 42, 0.75)',
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 4,
+  },
+  multiPhotoIndexText: {
+    color: '#FFFFFF',
+    fontSize: 9,
+    fontWeight: '700',
+  },
+  multiPhotoViewBadge: {
+    position: 'absolute',
+    bottom: 3,
+    right: 3,
+    backgroundColor: 'rgba(15, 23, 42, 0.7)',
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 4,
+  },
+  multiPhotoViewText: {
+    color: '#FFFFFF',
+    fontSize: 9,
+  },
+  multiPhotoGeoTagPill: {
+    position: 'absolute',
+    bottom: 3,
+    left: 3,
+    backgroundColor: 'rgba(21, 128, 61, 0.85)',
+    paddingHorizontal: 3,
+    paddingVertical: 1,
+    borderRadius: 3,
+  },
+  multiPhotoGeoTagText: {
+    color: '#FFFFFF',
+    fontSize: 8,
+    fontWeight: '700',
+  },
+  multiPhotoDeleteBtn: {
+    position: 'absolute',
+    top: -5,
+    right: -5,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#EF4444',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: '#FFFFFF',
+    elevation: 3,
+    zIndex: 10,
+  },
+  multiPhotoDeleteBtnText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '900',
+    lineHeight: 12,
+  },
+  multiPhotoSizeLabel: {
+    fontSize: 10,
+    color: '#64748B',
+    marginTop: 3,
+    textAlign: 'center',
+  },
+  photoActionsRow: {
+    marginTop: 4,
+  },
+  actionBtnAddMore: {
+    backgroundColor: '#0284C7',
+  },
+  maxPhotosBanner: {
+    backgroundColor: '#ECFDF5',
+    borderRadius: 8,
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+  },
+  maxPhotosBannerText: {
+    color: '#065F46',
+    fontSize: 12,
+    fontWeight: '700',
   },
   proximityBadge: {
     paddingHorizontal: 8,
