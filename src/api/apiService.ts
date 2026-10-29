@@ -36,7 +36,7 @@ const ENDPOINTS = [
 
 let activeEndpointIndex = 0;
 
-export const getActiveBaseUrl = () => ENDPOINTS[activeEndpointIndex]; 333
+export const getActiveBaseUrl = () => ENDPOINTS[activeEndpointIndex];
 // In-memory cache for base64 installation photos
 const imageBase64Cache = new Map<number, string>();
 
