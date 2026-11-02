@@ -54,6 +54,9 @@ export const getDatabase = async (): Promise<DB> => {
     try {
       await db.execute('ALTER TABLE pending_stations ADD COLUMN RouteStationStatusId INTEGER;');
     } catch (_) {}
+    try {
+      await db.execute('ALTER TABLE pending_stations ADD COLUMN SwitchPassword TEXT;');
+    } catch (_) {}
 
     await db.execute(`
       CREATE TABLE IF NOT EXISTS sync_meta (
@@ -124,6 +127,10 @@ export const getDatabase = async (): Promise<DB> => {
       );
     `);
 
+    try {
+      await db.execute('ALTER TABLE station_hardware_draft ADD COLUMN switchPassword TEXT;');
+    } catch (_) {}
+
     // Table for caching dropdown file types offline
     await db.execute(`
       CREATE TABLE IF NOT EXISTS cached_file_types (
@@ -178,6 +185,9 @@ export const getDatabase = async (): Promise<DB> => {
     } catch (_) {}
     try {
       await db.execute('ALTER TABLE offline_submissions ADD COLUMN workerStationAssignmentId INTEGER;');
+    } catch (_) {}
+    try {
+      await db.execute('ALTER TABLE offline_submissions ADD COLUMN switchPassword TEXT;');
     } catch (_) {}
     try {
       await db.execute('ALTER TABLE offline_submissions ADD COLUMN isWorkerSubmission INTEGER DEFAULT 0;');
@@ -239,6 +249,7 @@ export const syncPendingStationsToSQLite = async (
             StationAddress,
             SwitchSerialNumber,
             ResilientSerialNumber,
+            SwitchPassword,
             Zone,
             Circle,
             Division,
@@ -246,7 +257,7 @@ export const syncPendingStationsToSQLite = async (
             RouteStationStatusId,
             jsonData,
             syncedAt
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             station.ExcelDataId,
             station.VendorStationAssignmentId,
@@ -259,6 +270,7 @@ export const syncPendingStationsToSQLite = async (
             (station as any).SubStationAddress || (station as any).StationAddress || '',
             station.SwitchSerialNumber || '',
             station.ResilientSerialNumber || '',
+            station.SwitchPassword || null,
             station.Zone || '',
             station.Circle || '',
             station.Division || '',
@@ -482,6 +494,7 @@ export const saveDraftHardwareDetails = async (
     switchSerialNumber?: string;
     resilientSerialNumber?: string;
     switchFirmwareNumber?: string;
+    switchPassword?: string;
   },
 ): Promise<boolean> => {
   try {
@@ -492,16 +505,18 @@ export const saveDraftHardwareDetails = async (
     let prevSw = '';
     let prevRes = '';
     let prevFw = '';
+    let prevPass = '';
 
     try {
       const existingDraft = await db.execute(
-        'SELECT switchSerialNumber, resilientSerialNumber, switchFirmwareNumber FROM station_hardware_draft WHERE excelDataId = ? AND vendorId = ?',
+        'SELECT switchSerialNumber, resilientSerialNumber, switchFirmwareNumber, switchPassword FROM station_hardware_draft WHERE excelDataId = ? AND vendorId = ?',
         [excelDataId, vendorId],
       );
       if (existingDraft && existingDraft.rows && existingDraft.rows.length > 0) {
         prevSw = (existingDraft.rows[0].switchSerialNumber as string) || '';
         prevRes = (existingDraft.rows[0].resilientSerialNumber as string) || '';
         prevFw = (existingDraft.rows[0].switchFirmwareNumber as string) || '';
+        prevPass = (existingDraft.rows[0].switchPassword as string) || '';
       }
     } catch (_) {}
 
@@ -522,6 +537,7 @@ export const saveDraftHardwareDetails = async (
     const sw = details.switchSerialNumber !== undefined ? details.switchSerialNumber : prevSw;
     const res = details.resilientSerialNumber !== undefined ? details.resilientSerialNumber : prevRes;
     const fw = details.switchFirmwareNumber !== undefined ? details.switchFirmwareNumber : prevFw;
+    const pass = details.switchPassword !== undefined ? details.switchPassword : prevPass;
 
     // 2. Persist immediately into dedicated station_hardware_draft table
     await db.execute(
@@ -531,9 +547,10 @@ export const saveDraftHardwareDetails = async (
         switchSerialNumber,
         resilientSerialNumber,
         switchFirmwareNumber,
+        switchPassword,
         updatedAt
-      ) VALUES (?, ?, ?, ?, ?, ?)`,
-      [excelDataId, vendorId, sw, res, fw, now],
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [excelDataId, vendorId, sw, res, fw, pass, now],
     );
 
     // 3. Keep station_proof_drafts rows in sync
@@ -617,6 +634,7 @@ export const getStationProofDraft = async (
   switchSerialNumber: string;
   resilientSerialNumber: string;
   switchFirmwareNumber: string;
+  switchPassword: string;
   hasDraft: boolean;
 }> => {
   try {
@@ -626,16 +644,18 @@ export const getStationProofDraft = async (
     let switchSerialNumber = '';
     let resilientSerialNumber = '';
     let switchFirmwareNumber = '';
+    let switchPassword = '';
 
     try {
       const hwResult = await db.execute(
-        'SELECT switchSerialNumber, resilientSerialNumber, switchFirmwareNumber FROM station_hardware_draft WHERE excelDataId = ? AND vendorId = ?',
+        'SELECT switchSerialNumber, resilientSerialNumber, switchFirmwareNumber, switchPassword FROM station_hardware_draft WHERE excelDataId = ? AND vendorId = ?',
         [excelDataId, vendorId],
       );
       if (hwResult && hwResult.rows && hwResult.rows.length > 0) {
         switchSerialNumber = (hwResult.rows[0].switchSerialNumber as string) || '';
         resilientSerialNumber = (hwResult.rows[0].resilientSerialNumber as string) || '';
         switchFirmwareNumber = (hwResult.rows[0].switchFirmwareNumber as string) || '';
+        switchPassword = (hwResult.rows[0].switchPassword as string) || '';
       }
     } catch (_) {}
 
@@ -705,25 +725,7 @@ export const getStationProofDraft = async (
       }
     }
 
-    // 3. Fallback to pending_stations if hardware serials are not in drafts
-    if (!switchSerialNumber || !resilientSerialNumber) {
-      try {
-        const psRes = await db.execute(
-          'SELECT SwitchSerialNumber, ResilientSerialNumber FROM pending_stations WHERE ExcelDataId = ? LIMIT 1',
-          [excelDataId],
-        );
-        if (psRes && psRes.rows && psRes.rows.length > 0) {
-          if (!switchSerialNumber && psRes.rows[0].SwitchSerialNumber) {
-            const sw = String(psRes.rows[0].SwitchSerialNumber).trim();
-            if (sw && sw !== 'N/A' && sw !== 'NA') switchSerialNumber = sw;
-          }
-          if (!resilientSerialNumber && psRes.rows[0].ResilientSerialNumber) {
-            const res = String(psRes.rows[0].ResilientSerialNumber).trim();
-            if (res && res !== 'N/A' && res !== 'NA') resilientSerialNumber = res;
-          }
-        }
-      } catch (_) {}
-    }
+
 
     // 4. Get remarks
     const remarksResult = await db.execute(
@@ -741,7 +743,8 @@ export const getStationProofDraft = async (
       remarks.trim().length > 0 ||
       switchSerialNumber.trim().length > 0 ||
       resilientSerialNumber.trim().length > 0 ||
-      switchFirmwareNumber.trim().length > 0;
+      switchFirmwareNumber.trim().length > 0 ||
+      switchPassword.trim().length > 0;
 
     return {
       photos,
@@ -749,6 +752,7 @@ export const getStationProofDraft = async (
       switchSerialNumber,
       resilientSerialNumber,
       switchFirmwareNumber,
+      switchPassword,
       hasDraft,
     };
   } catch (error) {
@@ -759,6 +763,7 @@ export const getStationProofDraft = async (
       switchSerialNumber: '',
       resilientSerialNumber: '',
       switchFirmwareNumber: '',
+      switchPassword: '',
       hasDraft: false,
     };
   }
@@ -883,6 +888,7 @@ export interface OfflineSubmissionItem {
   switchSerialNumber?: string;
   resilientSerialNumber?: string;
   switchFirmwareNumber?: string;
+  switchPassword?: string | null;
   routeStationStatusId?: number;
   status: 'pending' | 'syncing' | 'failed';
   errorMessage?: string;
@@ -943,6 +949,7 @@ export const queueOfflineSubmission = async (params: {
   switchSerialNumber?: string;
   resilientSerialNumber?: string;
   switchFirmwareNumber?: string;
+  switchPassword?: string | null;
   routeStationStatusId?: number;
 }): Promise<{ success: boolean; id?: number; error?: string }> => {
   try {
@@ -974,12 +981,13 @@ export const queueOfflineSubmission = async (params: {
         switchSerialNumber,
         resilientSerialNumber,
         switchFirmwareNumber,
+        switchPassword,
         routeStationStatusId,
         status,
         errorMessage,
         createdAt,
         updatedAt
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         params.excelDataId,
         params.stationName || 'Substation',
@@ -996,6 +1004,7 @@ export const queueOfflineSubmission = async (params: {
         params.switchSerialNumber || '',
         params.resilientSerialNumber || '',
         params.switchFirmwareNumber || '',
+        params.switchPassword || '',
         params.routeStationStatusId || 0,
         'pending',
         '',
@@ -1064,6 +1073,7 @@ export const getOfflineSubmissions = async (
           switchSerialNumber: (row.switchSerialNumber as string) || '',
           resilientSerialNumber: (row.resilientSerialNumber as string) || '',
           switchFirmwareNumber: (row.switchFirmwareNumber as string) || '',
+          switchPassword: (row.switchPassword as string) || null,
           routeStationStatusId: Number(row.routeStationStatusId || 0),
           status: (row.status as any) || 'pending',
           errorMessage: (row.errorMessage as string) || undefined,
@@ -1188,6 +1198,7 @@ export const syncSingleOfflineSubmission = async (
       formData.append('SwitchFirmWareNumber', item.switchFirmwareNumber || 'N/A');
       formData.append('SwitchSerialNumber', item.switchSerialNumber || 'N/A');
       formData.append('ResilientSerialNumber', item.resilientSerialNumber || 'N/A');
+      formData.append('SwitchPassword', item.switchPassword && item.switchPassword.trim() ? item.switchPassword.trim() : 'null');
       formData.append('CreatedByUserName', item.createdByUserName || 'Worker');
       formData.append('FileTypeIds', JSON.stringify(item.fileTypeIds));
       formData.append('FileTypeId', JSON.stringify(item.fileTypeIds));
@@ -1208,6 +1219,7 @@ export const syncSingleOfflineSubmission = async (
       formData.append('SwitchSerialNumber', item.switchSerialNumber || 'N/A');
       formData.append('ResilientSerialNumber', item.resilientSerialNumber || 'N/A');
       formData.append('SwitchFirmWareNumber', item.switchFirmwareNumber || 'N/A');
+      formData.append('SwitchPassword', item.switchPassword && item.switchPassword.trim() ? item.switchPassword.trim() : 'null');
       formData.append('RouteStationStatusId', String(item.routeStationStatusId || 0));
     }
 

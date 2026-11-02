@@ -9,7 +9,11 @@ import com.facebook.react.uimanager.ViewManager
 
 class VendorUpdatePackage : ReactPackage {
     override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> {
-        return listOf(VendorUpdateModule(reactContext))
+        return listOf(
+            VendorUpdateModule(reactContext),
+            AnnexurePdfModule(reactContext),
+            SwitchFilesModule(reactContext)
+        )
     }
 
     override fun createViewManagers(

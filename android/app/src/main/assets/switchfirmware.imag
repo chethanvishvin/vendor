@@ -1,0 +1,7 @@
+# KPTCL Switch Firmware Image (.imag)
+# Replace this file with your actual switchfirmware.imag binary file
+[SWITCH_FIRMWARE_IMAGE_BINARY_PAYLOAD]
+VERSION=2.4.1-RELEASE
+BUILD=20261102
+TARGET=KPTCL-RESILIENT-SWITCH
+CHECKSUM=SHA256:7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069

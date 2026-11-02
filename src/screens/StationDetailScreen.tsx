@@ -13,6 +13,8 @@ import {
 import { StationItem, CompletedStationItem, VendorProfile } from '../types';
 import { InstallationPhotoGallery } from '../components/InstallationPhotoGallery';
 import { InstallationProofSection } from '../components/InstallationProofSection';
+import { AnnexureModal } from '../components/AnnexureModal';
+import { SwitchFilesModal } from '../components/SwitchFilesModal';
 
 interface StationDetailScreenProps {
   station: StationItem | CompletedStationItem;
@@ -29,6 +31,9 @@ export const StationDetailScreen: React.FC<StationDetailScreenProps> = ({
   onBack,
   onSubmissionSuccess,
 }) => {
+  const [showAnnexureModal, setShowAnnexureModal] = React.useState(false);
+  const [showSwitchFilesModal, setShowSwitchFilesModal] = React.useState(false);
+
   // Handle Android hardware back button
   useEffect(() => {
     const backAction = () => {
@@ -152,6 +157,50 @@ export const StationDetailScreen: React.FC<StationDetailScreenProps> = ({
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}>
 
+        {/* Annexure-11 Work Completion Certificate Card */}
+        <TouchableOpacity
+          style={styles.annexureBannerCard}
+          onPress={() => setShowAnnexureModal(true)}
+          activeOpacity={0.85}>
+          <View style={styles.annexureBannerIconWrap}>
+            <Text style={styles.annexureBannerIcon}>📄</Text>
+          </View>
+          <View style={styles.annexureBannerInfo}>
+            <View style={styles.annexureBannerTitleRow}>
+              <Text style={styles.annexureBannerTitle}>Annexure – 11 Certificate</Text>
+              <View style={styles.annexureActionBadge}>
+                <Text style={styles.annexureActionBadgeText}>Generate PDF</Text>
+              </View>
+            </View>
+            <Text style={styles.annexureBannerSubtitle} numberOfLines={1}>
+              Work Completion for {station.Station} • Download, Share & View
+            </Text>
+          </View>
+          <Text style={styles.annexureBannerArrow}>➔</Text>
+        </TouchableOpacity>
+
+        {/* Switch Firmware & Configuration Files Card */}
+        <TouchableOpacity
+          style={styles.switchFilesBannerCard}
+          onPress={() => setShowSwitchFilesModal(true)}
+          activeOpacity={0.85}>
+          <View style={styles.switchFilesBannerIconWrap}>
+            <Text style={styles.switchFilesBannerIcon}>💾</Text>
+          </View>
+          <View style={styles.annexureBannerInfo}>
+            <View style={styles.annexureBannerTitleRow}>
+              <Text style={styles.switchFilesBannerTitle}>Switch Firmware &amp; Config</Text>
+              <View style={styles.switchFilesActionBadge}>
+                <Text style={styles.switchFilesActionBadgeText}>2 Files</Text>
+              </View>
+            </View>
+            <Text style={styles.annexureBannerSubtitle} numberOfLines={1}>
+              switchfirmware.imag &amp; switchconfig.cfg • Download &amp; Share
+            </Text>
+          </View>
+          <Text style={styles.switchFilesBannerArrow}>➔</Text>
+        </TouchableOpacity>
+
         {/* Assigned Field Worker Card (For Vendor View) */}
         {!isWorker && 'WorkerName' in station && station.WorkerName && station.WorkerName !== 'null' ? (
           <View style={styles.card}>
@@ -199,7 +248,7 @@ export const StationDetailScreen: React.FC<StationDetailScreenProps> = ({
         </View>
 
         {/* Hardware & Serial Numbers */}
-        <View style={styles.card}>
+        {/* <View style={styles.card}>
           <View style={styles.cardHeader}>
             <Text style={styles.cardTitle}>⚡ Hardware & Equipment Serials</Text>
           </View>
@@ -217,7 +266,7 @@ export const StationDetailScreen: React.FC<StationDetailScreenProps> = ({
               </Text>
             </View>
           </View>
-        </View>
+        </View> */}
 
         {/* Dynamic Installation Proof & Photo Upload (For Pending Substation) */}
         {!isCompleted && currentVendor && (
@@ -339,6 +388,16 @@ export const StationDetailScreen: React.FC<StationDetailScreenProps> = ({
           ) : null}
         </View>
 
+        {/* Generate Annexure-11 Certificate Button */}
+        <TouchableOpacity
+          style={styles.bottomAnnexureBtn}
+          onPress={() => setShowAnnexureModal(true)}
+          activeOpacity={0.85}>
+          <Text style={styles.bottomAnnexureBtnText}>
+            📄 Generate &amp; Download Annexure-11 Certificate
+          </Text>
+        </TouchableOpacity>
+
         {/* Bottom Back Button */}
         <TouchableOpacity
           style={styles.bottomBackBtn}
@@ -349,6 +408,19 @@ export const StationDetailScreen: React.FC<StationDetailScreenProps> = ({
 
         <View style={{ height: 30 }} />
       </ScrollView>
+
+      {/* Annexure-11 Modal */}
+      <AnnexureModal
+        visible={showAnnexureModal}
+        station={station}
+        onClose={() => setShowAnnexureModal(false)}
+      />
+
+      {/* Switch Files Modal */}
+      <SwitchFilesModal
+        visible={showSwitchFilesModal}
+        onClose={() => setShowSwitchFilesModal(false)}
+      />
     </View>
   );
 };
@@ -631,5 +703,140 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: '#334155',
+  },
+  annexureBannerCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    flexDirection: 'row',
+    alignItems: 'center',
+    shadowColor: '#2563EB',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 1.5,
+    gap: 10,
+  },
+  annexureBannerIconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  annexureBannerIcon: {
+    fontSize: 16,
+  },
+  annexureBannerInfo: {
+    flex: 1,
+  },
+  annexureBannerTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 1,
+  },
+  annexureBannerTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1E293B',
+  },
+  annexureActionBadge: {
+    backgroundColor: '#DBEAFE',
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 4,
+  },
+  annexureActionBadgeText: {
+    fontSize: 9.5,
+    fontWeight: '700',
+    color: '#1D4ED8',
+  },
+  annexureBannerSubtitle: {
+    fontSize: 11,
+    color: '#64748B',
+  },
+  annexureBannerArrow: {
+    fontSize: 13,
+    color: '#2563EB',
+    fontWeight: '700',
+  },
+  bottomAnnexureBtn: {
+    backgroundColor: '#2563EB',
+    paddingVertical: 10,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 10,
+    shadowColor: '#2563EB',
+    shadowOffset: { width: 0, height: 1.5 },
+    shadowOpacity: 0.15,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  bottomAnnexureBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  switchFilesBannerCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    flexDirection: 'row',
+    alignItems: 'center',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 1.5,
+    gap: 10,
+  },
+  switchFilesBannerIconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: '#F1F5F9',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  switchFilesBannerIcon: {
+    fontSize: 16,
+  },
+  switchFilesBannerTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  switchFilesActionBadge: {
+    backgroundColor: '#F1F5F9',
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 4,
+    borderWidth: 0.5,
+    borderColor: '#CBD5E1',
+  },
+  switchFilesActionBadgeText: {
+    fontSize: 9.5,
+    fontWeight: '700',
+    color: '#334155',
+  },
+  switchFilesBannerArrow: {
+    fontSize: 13,
+    color: '#475569',
+    fontWeight: '700',
   },
 });

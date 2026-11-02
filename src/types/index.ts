@@ -76,6 +76,7 @@ export interface StationItem {
   SwitchSerialNumber: string;
   ResilientSerialNumber: string;
   SwitchFirmWareNumber?: string;
+  SwitchPassword?: string | null;
   WorkerStationAssignmentId?: number;
   WorkerId?: number;
   WorkerName?: string | null;
@@ -167,6 +168,7 @@ export interface CompletedStationItem {
   SwitchSerialNumber: string | null;
   ResilientSerialNumber: string | null;
   SwitchFirmWareNumber?: string | null;
+  SwitchPassword?: string | null;
   InstallationSubmissionId: number | null;
   InstallationStatusId: number | null;
   InstallationCreatedAt: string | null;
@@ -437,6 +439,7 @@ export interface WorkerPendingStationItem {
   Taluk: string;
   Station: string;
   VoltageClass: string;
+  SwitchPassword?: string | null;
   InChangreAEJEname: string;
   StationContactNumber: string;
   SubStationAddress: string;

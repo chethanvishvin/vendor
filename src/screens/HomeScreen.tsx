@@ -34,6 +34,8 @@ import { StationDetailScreen } from './StationDetailScreen';
 import { OfflineQueueScreen } from './OfflineQueueScreen';
 import { VendorWorkersScreen } from './VendorWorkersScreen';
 import { CompletedStationCard } from '../components/CompletedStationCard';
+import { AnnexureModal } from '../components/AnnexureModal';
+import { SwitchFilesModal } from '../components/SwitchFilesModal';
 import NetInfo from '@react-native-community/netinfo';
 import {
   syncPendingStationsToSQLite,
@@ -114,6 +116,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   const [offlineQueueCount, setOfflineQueueCount] = useState<number>(0);
   const [showWorkersScreen, setShowWorkersScreen] = useState<boolean>(false);
   const [workersInitialTab, setWorkersInitialTab] = useState<'list' | 'assign' | 'assigned' | 'create'>('list');
+  const [showBatchAnnexureModal, setShowBatchAnnexureModal] = useState<boolean>(false);
+  const [showSwitchFilesModal, setShowSwitchFilesModal] = useState<boolean>(false);
 
   // Single station worker assignment state
   const [assignModalStation, setAssignModalStation] = useState<StationItem | null>(null);
@@ -378,6 +382,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             SwitchSerialNumber: item.SwitchSerialNumber || '',
             ResilientSerialNumber: item.ResilientSerialNumber || '',
             SwitchFirmWareNumber: item.SwitchFirmWareNumber || '',
+            SwitchPassword: item.SwitchPassword ?? (item as any)?.switchPassword ?? null,
             PendingFileTypes: item.PendingFileTypeIds || item.PendingFileTypes || [],
             PendingFileTypeIds: item.PendingFileTypeIds || [],
             VendorStatusName: item.StatusId === 2 ? 'Draft' : (item.VendorStatusName || 'Pending'),
@@ -493,6 +498,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             SwitchSerialNumber: item.SwitchSerialNumber || null,
             ResilientSerialNumber: item.ResilientSerialNumber || null,
             SwitchFirmWareNumber: item.SwitchFirmWareNumber || null,
+            SwitchPassword: item.SwitchPassword ?? (item as any)?.switchPassword ?? null,
             InstallationSubmissionId: item.InstallationSubmissionId || null,
             InstallationStatusId: item.InstallationStatusId || 3,
             InstallationCreatedAt: item.InstallationCreatedAt || null,
@@ -999,6 +1005,58 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             </Text>
           </TouchableOpacity>
         </View>
+
+        {/* Annexure-11 Certificate Button for All Pending Stations */}
+        {allAssignedStations.length > 0 && (
+          <TouchableOpacity
+            style={styles.dbSyncAnnexureCardBtn}
+            onPress={() => setShowBatchAnnexureModal(true)}
+            activeOpacity={0.85}>
+            <View style={styles.dbSyncAnnexureLeft}>
+              <View style={styles.dbSyncAnnexureIconWrap}>
+                <Text style={styles.dbSyncAnnexureIcon}>📄</Text>
+              </View>
+              <View style={styles.dbSyncAnnexureTexts}>
+                <View style={styles.dbSyncAnnexureTitleRow}>
+                  <Text style={styles.dbSyncAnnexureTitle}>Annexure – 11 Certificate</Text>
+                  <View style={styles.dbSyncAnnexureBadge}>
+                    <Text style={styles.dbSyncAnnexureBadgeText}>
+                      All {allAssignedStations.length} Pending
+                    </Text>
+                  </View>
+                </View>
+                <Text style={styles.dbSyncAnnexureSub} numberOfLines={1}>
+                  Single PDF with all {allAssignedStations.length} stations • Download &amp; Share
+                </Text>
+              </View>
+            </View>
+            <Text style={styles.dbSyncAnnexureArrow}>➔</Text>
+          </TouchableOpacity>
+        )}
+
+        {/* Switch Firmware & Configuration Files Button */}
+        <TouchableOpacity
+          style={styles.dbSyncSwitchFilesBtn}
+          onPress={() => setShowSwitchFilesModal(true)}
+          activeOpacity={0.85}>
+          <View style={styles.dbSyncAnnexureLeft}>
+            <View style={styles.dbSyncSwitchIconWrap}>
+              <Text style={styles.dbSyncAnnexureIcon}>💾</Text>
+            </View>
+            <View style={styles.dbSyncAnnexureTexts}>
+              <View style={styles.dbSyncAnnexureTitleRow}>
+                <Text style={styles.dbSyncSwitchTitle}>Switch Firmware &amp; Config</Text>
+                <View style={styles.dbSyncSwitchBadge}>
+                  <Text style={styles.dbSyncSwitchBadgeText}>2 Files</Text>
+                </View>
+              </View>
+              <Text style={styles.dbSyncSwitchSub} numberOfLines={1}>
+                switchfirmware.imag • switchconfig.cfg • Download &amp; Share
+              </Text>
+            </View>
+          </View>
+          <Text style={styles.dbSyncSwitchArrow}>➔</Text>
+        </TouchableOpacity>
       </View>
 
       {/* Metric Counters Banner */}
@@ -1229,19 +1287,19 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         </View>
 
         {/* Jurisdiction Meta: Zone, Circle, Division */}
-        {(item.Zone || item.Circle || item.Division) ? (
+        {/* {(item.Zone || item.Circle || item.Division) ? (
           <View style={styles.cardJurisdictionRow}>
             <Text style={styles.cardJurisdictionText} numberOfLines={1}>
               🌐 {[item.Zone, item.Circle, item.Division].filter(Boolean).join(' • ')}
             </Text>
           </View>
-        ) : null}
+        ) : null} */}
 
-        <View style={styles.cardMetaRow}>
+        {/* <View style={styles.cardMetaRow}>
           <Text style={styles.talukText}>
             📍 {item.Taluk} • Pin: {item.PinCode}
-          </Text>
-        </View>
+          </Text>33
+        </View> */}
 
         <Text style={styles.stationAddress} numberOfLines={2}>
           {item.SubStationAddress}
@@ -1256,10 +1314,10 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             </Text>
           </View>
 
-          <View style={styles.hardwareBadge}>
+          {/* <View style={styles.hardwareBadge}>
             <Text style={styles.hardwareLabel}>Switch S/N:</Text>
             <Text style={styles.hardwareVal}>{item.SwitchSerialNumber || '-'}</Text>
-          </View>
+          </View> */}
         </View>
 
         {/* Worker Assignment Status (when assigned to worker) */}
@@ -1674,6 +1732,23 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      {/* Batch Annexure-11 Modal for All Pending Stations */}
+      {showBatchAnnexureModal && (
+        <AnnexureModal
+          visible={showBatchAnnexureModal}
+          stations={allAssignedStations}
+          onClose={() => setShowBatchAnnexureModal(false)}
+        />
+      )}
+
+      {/* Switch Firmware & Configuration Files Modal */}
+      {showSwitchFilesModal && (
+        <SwitchFilesModal
+          visible={showSwitchFilesModal}
+          onClose={() => setShowSwitchFilesModal(false)}
+        />
+      )}
     </View>
   );
 };
@@ -2458,6 +2533,122 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
     color: '#2563EB',
+  },
+  dbSyncAnnexureCardBtn: {
+    marginTop: 10,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    borderRadius: 10,
+    paddingVertical: 9,
+    paddingHorizontal: 11,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  dbSyncAnnexureLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  dbSyncAnnexureIconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: 7,
+    backgroundColor: '#DBEAFE',
+    borderWidth: 1,
+    borderColor: '#93C5FD',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dbSyncAnnexureIcon: {
+    fontSize: 16,
+  },
+  dbSyncAnnexureTexts: {
+    flex: 1,
+  },
+  dbSyncAnnexureTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 2,
+  },
+  dbSyncAnnexureTitle: {
+    fontSize: 12.5,
+    fontWeight: '700',
+    color: '#1E3A8A',
+  },
+  dbSyncAnnexureBadge: {
+    backgroundColor: '#DBEAFE',
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 4,
+  },
+  dbSyncAnnexureBadgeText: {
+    fontSize: 9.5,
+    fontWeight: '700',
+    color: '#1D4ED8',
+  },
+  dbSyncAnnexureSub: {
+    fontSize: 11,
+    color: '#3B82F6',
+  },
+  dbSyncAnnexureArrow: {
+    fontSize: 14,
+    color: '#2563EB',
+    fontWeight: '700',
+    marginLeft: 6,
+  },
+  dbSyncSwitchFilesBtn: {
+    marginTop: 8,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 10,
+    paddingVertical: 9,
+    paddingHorizontal: 11,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  dbSyncSwitchIconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: 7,
+    backgroundColor: '#F1F5F9',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dbSyncSwitchTitle: {
+    fontSize: 12.5,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  dbSyncSwitchBadge: {
+    backgroundColor: '#F1F5F9',
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 4,
+    borderWidth: 0.5,
+    borderColor: '#CBD5E1',
+  },
+  dbSyncSwitchBadgeText: {
+    fontSize: 9.5,
+    fontWeight: '700',
+    color: '#334155',
+  },
+  dbSyncSwitchSub: {
+    fontSize: 11,
+    color: '#64748B',
+  },
+  dbSyncSwitchArrow: {
+    fontSize: 14,
+    color: '#475569',
+    fontWeight: '700',
+    marginLeft: 6,
   },
   queueBtn: {
     flex: 1,

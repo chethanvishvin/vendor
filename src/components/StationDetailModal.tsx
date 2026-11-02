@@ -89,8 +89,8 @@ export const StationDetailModal: React.FC<StationDetailModalProps> = ({
             style={styles.scrollArea}
             showsVerticalScrollIndicator={false}
             contentContainerStyle={styles.scrollContent}>
-            
-           {/* In-Charge Engineer Card */}
+
+            {/* In-Charge Engineer Card */}
             <View style={styles.card}>
               <View style={styles.cardHeader}>
                 <Text style={styles.cardTitle}>👤 In-Charge AE / JE Engineer</Text>
@@ -120,25 +120,6 @@ export const StationDetailModal: React.FC<StationDetailModalProps> = ({
             </View>
 
             {/* Hardware & Serial Numbers */}
-            <View style={styles.card}>
-              <View style={styles.cardHeader}>
-                <Text style={styles.cardTitle}>⚡ Hardware & Equipment Serials</Text>
-              </View>
-              <View style={styles.gridRow}>
-                <View style={styles.gridItem}>
-                  <Text style={styles.gridLabel}>Switch Serial No.</Text>
-                  <Text style={styles.gridValue}>
-                    {station.SwitchSerialNumber || 'Not Recorded'}
-                  </Text>
-                </View>
-                <View style={styles.gridItem}>
-                  <Text style={styles.gridLabel}>Resilient Serial No.</Text>
-                  <Text style={styles.gridValue}>
-                    {station.ResilientSerialNumber || 'Not Recorded'}
-                  </Text>
-                </View>
-              </View>
-            </View>
 
             {/* Dynamic Installation Proof & Photo Upload (For Pending Substation) */}
             {!isCompleted && currentVendor && (

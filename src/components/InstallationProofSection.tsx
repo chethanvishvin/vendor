@@ -22,6 +22,8 @@ import Marker, { Position, ImageFormat } from 'react-native-image-marker';
 import { apiService } from '../api/apiService';
 import NetInfo from '@react-native-community/netinfo';
 import { StationItem, VendorFileType, VendorProfile, DEFAULT_FILE_TYPES } from '../types';
+import { AnnexureModal } from './AnnexureModal';
+import { SwitchFilesModal } from './SwitchFilesModal';
 import {
   saveDraftPhoto,
   saveDraftHardwareDetails,
@@ -530,20 +532,38 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
   const [isDraftRestored, setIsDraftRestored] = useState<boolean>(false);
   const [geoTaggingId, setGeoTaggingId] = useState<number | null>(null);
   const [viewingPhoto, setViewingPhoto] = useState<ViewingPhotoInfo | null>(null);
+  const [showAnnexureModal, setShowAnnexureModal] = useState<boolean>(false);
+  const [showSwitchFilesModal, setShowSwitchFilesModal] = useState<boolean>(false);
 
   // Hardware serial numbers & switch firmware state (auto-restored from SQLite cache)
-  const [switchSerialNumber, setSwitchSerialNumber] = useState<string>(() => {
-    const sw = station.SwitchSerialNumber || (station as any).switchSerialNumber || '';
-    return sw === 'N/A' || sw === 'NA' ? '' : sw;
-  });
-  const [resilientSerialNumber, setResilientSerialNumber] = useState<string>(() => {
-    const res = station.ResilientSerialNumber || (station as any).resilientSerialNumber || '';
-    return res === 'N/A' || res === 'NA' ? '' : res;
-  });
+  const rawStationPass =
+    station.SwitchPassword !== undefined && station.SwitchPassword !== null
+      ? station.SwitchPassword
+      : (station as any)?.switchPassword;
+
+  const isSwitchPasswordCaptured = Boolean(
+    rawStationPass &&
+    String(rawStationPass).trim() !== '' &&
+    String(rawStationPass).trim().toLowerCase() !== 'null' &&
+    String(rawStationPass).trim().toLowerCase() !== 'undefined' &&
+    String(rawStationPass).trim().toUpperCase() !== 'N/A' &&
+    String(rawStationPass).trim().toUpperCase() !== 'NA',
+  );
+
+  // Never auto-populate switch & resilient serial numbers from the API in verification screen
+  const [switchSerialNumber, setSwitchSerialNumber] = useState<string>('');
+  const [resilientSerialNumber, setResilientSerialNumber] = useState<string>('');
   const [switchFirmwareNumber, setSwitchFirmwareNumber] = useState<string>(() => {
     const fw = station.SwitchFirmWareNumber || (station as any).SwitchFirmwareNumber || '';
     return fw === 'N/A' || fw === 'NA' ? '' : fw;
   });
+  const [switchPassword, setSwitchPassword] = useState<string>(() => {
+    if (isSwitchPasswordCaptured && rawStationPass) {
+      return String(rawStationPass);
+    }
+    return '';
+  });
+  const [showSwitchPassword, setShowSwitchPassword] = useState<boolean>(false);
 
   // Substation coordinates parsing & overall proximity calculation
   const subLat = parseFloat(String(station.Latitude || '').trim());
@@ -584,17 +604,35 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
           });
           setSelectedFiles(normalized);
         }
-        // Restore cached Switch Serial Number and Resilient Serial Number from SQLite draft
-        if (draft.switchSerialNumber && draft.switchSerialNumber.trim().length > 0) {
+        // Restore cached Switch Serial Number and Resilient Serial Number from SQLite draft only if user typed them
+        // (Never auto-populate from API / pending station serial numbers)
+        const apiSw = String(station.SwitchSerialNumber || (station as any).switchSerialNumber || '').trim();
+        const apiRes = String(station.ResilientSerialNumber || (station as any).resilientSerialNumber || '').trim();
+
+        if (
+          draft.switchSerialNumber &&
+          draft.switchSerialNumber.trim().length > 0 &&
+          draft.switchSerialNumber.trim() !== apiSw
+        ) {
           setSwitchSerialNumber(draft.switchSerialNumber.trim());
         }
-        if (draft.resilientSerialNumber && draft.resilientSerialNumber.trim().length > 0) {
+        if (
+          draft.resilientSerialNumber &&
+          draft.resilientSerialNumber.trim().length > 0 &&
+          draft.resilientSerialNumber.trim() !== apiRes
+        ) {
           setResilientSerialNumber(draft.resilientSerialNumber.trim());
         }
         if (draft.switchFirmwareNumber) {
           const fw = draft.switchFirmwareNumber;
           if (fw !== 'N/A' && fw !== 'NA') {
             setSwitchFirmwareNumber(fw);
+          }
+        }
+        if (!isSwitchPasswordCaptured && (draft as any).switchPassword) {
+          const sp = String((draft as any).switchPassword).trim();
+          if (sp && sp !== 'null' && sp !== 'N/A' && sp !== 'NA') {
+            setSwitchPassword(sp);
           }
         }
         setIsDraftRestored(true);
@@ -611,6 +649,7 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
       switchSerialNumber: text,
       resilientSerialNumber,
       switchFirmwareNumber,
+      switchPassword,
     });
   };
 
@@ -620,6 +659,7 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
       switchSerialNumber,
       resilientSerialNumber: text,
       switchFirmwareNumber,
+      switchPassword,
     });
   };
 
@@ -629,6 +669,17 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
       switchSerialNumber,
       resilientSerialNumber,
       switchFirmwareNumber: text,
+      switchPassword,
+    });
+  };
+
+  const handleSwitchPasswordChange = (text: string) => {
+    setSwitchPassword(text);
+    saveDraftHardwareDetails(station.ExcelDataId, currentVendor.VendorId, {
+      switchSerialNumber,
+      resilientSerialNumber,
+      switchFirmwareNumber,
+      switchPassword: text,
     });
   };
 
@@ -986,24 +1037,22 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
       const netState = await NetInfo.fetch();
       const isOnline = netState.isConnected === true && netState.isInternetReachable !== false;
 
-      // Prepare fallback serials and firmware so backend non-empty check succeeds
-      const finalSwitchSerial =
-        switchSerialNumber.trim() ||
-        station.SwitchSerialNumber ||
-        (station as any).switchSerialNumber ||
-        'N/A';
-
-      const finalResilientSerial =
-        resilientSerialNumber.trim() ||
-        station.ResilientSerialNumber ||
-        (station as any).resilientSerialNumber ||
-        'N/A';
+      // Prepare Switch & Resilient Serial Numbers: strictly use user entered values, fallback to N/A (never auto-populate from API)
+      const finalSwitchSerial = switchSerialNumber.trim() || 'N/A';
+      const finalResilientSerial = resilientSerialNumber.trim() || 'N/A';
 
       const finalSwitchFirmware =
         switchFirmwareNumber.trim() ||
         station.SwitchFirmWareNumber ||
         (station as any).SwitchFirmwareNumber ||
         'N/A';
+
+      // Prepare Switch Password: send entered value if provided, or preserve if already captured, else null
+      const finalSwitchPassword = switchPassword.trim()
+        ? switchPassword.trim()
+        : isSwitchPasswordCaptured && rawStationPass
+          ? String(rawStationPass).trim()
+          : null;
 
       if (isOnline) {
         // --- ONLINE: DIRECT API SUBMISSION ---
@@ -1020,6 +1069,7 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
             formData.append('SwitchFirmWareNumber', finalSwitchFirmware);
             formData.append('SwitchSerialNumber', finalSwitchSerial);
             formData.append('ResilientSerialNumber', finalResilientSerial);
+            formData.append('SwitchPassword', finalSwitchPassword !== null ? finalSwitchPassword : 'null');
             formData.append('CreatedByUserName', createdBy);
             formData.append('FileTypeIds', JSON.stringify(submissionFileTypeIds));
             formData.append('FileTypeId', JSON.stringify(submissionFileTypeIds));
@@ -1038,6 +1088,7 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
             formData.append('SwitchSerialNumber', finalSwitchSerial);
             formData.append('ResilientSerialNumber', finalResilientSerial);
             formData.append('SwitchFirmWareNumber', finalSwitchFirmware);
+            formData.append('SwitchPassword', finalSwitchPassword !== null ? finalSwitchPassword : 'null');
             formData.append('RouteStationStatusId', String(routeStationStatusId));
           }
 
@@ -1059,6 +1110,7 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
           setSwitchSerialNumber('');
           setResilientSerialNumber('');
           setSwitchFirmwareNumber('');
+          setSwitchPassword('');
 
           Alert.alert(
             'Submission Successful! 🎉',
@@ -1104,6 +1156,7 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
         switchSerialNumber: finalSwitchSerial,
         resilientSerialNumber: finalResilientSerial,
         switchFirmwareNumber: finalSwitchFirmware,
+        switchPassword: finalSwitchPassword,
         routeStationStatusId,
       });
 
@@ -1114,6 +1167,7 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
         setSwitchSerialNumber('');
         setResilientSerialNumber('');
         setSwitchFirmwareNumber('');
+        setSwitchPassword('');
 
         Alert.alert(
           'Stored in Local DB! 📁',
@@ -1296,7 +1350,8 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
   const hasAnyHardware =
     (hasSwitchInPending && Boolean(switchSerialNumber.trim())) ||
     (hasResilientInPending && Boolean(resilientSerialNumber.trim())) ||
-    Boolean(switchFirmwareNumber.trim());
+    Boolean(switchFirmwareNumber.trim()) ||
+    Boolean(switchPassword.trim());
   const isSubmitDisabled = (!hasAnyPhoto && !hasAnyHardware) || isSubmitting;
 
   return (
@@ -1418,6 +1473,25 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
                   </View>
                 )}
 
+                {/* Annexure-11 Generation Button */}
+                {/* {isAnnexureCard && (
+                  <TouchableOpacity
+                    style={styles.annexureActionCardBtn}
+                    onPress={() => setShowAnnexureModal(true)}
+                    activeOpacity={0.8}>
+                    <Text style={styles.annexureActionCardBtnIcon}>📄</Text>
+                    <View style={styles.annexureActionCardBtnTexts}>
+                      <Text style={styles.annexureActionCardBtnTitle}>
+                        Generate Annexure-11 Certificate
+                      </Text>
+                      <Text style={styles.annexureActionCardBtnSub}>
+                        Generate PDF with {station.Station} substation name • View, Download &amp; Share
+                      </Text>
+                    </View>
+                    <Text style={styles.annexureActionCardBtnArrow}>➔</Text>
+                  </TouchableOpacity>
+                )} */}
+
                 {/* Bound Serial Number Input (for Switch S/N and Resilient S/N) */}
                 {isBoundHardwareCard && (
                   <View style={styles.boundSerialContainer}>
@@ -1452,6 +1526,69 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
                       autoCapitalize="characters"
                       autoCorrect={false}
                     />
+
+                    {isSwitchCard && (
+                      <TouchableOpacity
+                        style={styles.switchFilesCardBtn}
+                        onPress={() => setShowSwitchFilesModal(true)}
+                        activeOpacity={0.85}>
+                        <View style={styles.switchFilesCardLeft}>
+                          <Text style={styles.switchFilesCardIcon}>💾</Text>
+                          <View style={styles.switchFilesCardTexts}>
+                            <Text style={styles.switchFilesCardTitle}>
+                              Switch Firmware &amp; Config Files
+                            </Text>
+                            <Text style={styles.switchFilesCardSub}>
+                              switchfirmware.imag &amp; switchconfig.cfg • Download &amp; Share
+                            </Text>
+                          </View>
+                        </View>
+                        <Text style={styles.switchFilesCardArrow}>➔</Text>
+                      </TouchableOpacity>
+                    )}
+
+                    {/* Switch Password (only shown if SwitchPassword is null in pending station) */}
+                    {isSwitchCard && !isSwitchPasswordCaptured && (
+                      <View style={styles.boundPasswordContainer}>
+                        <View style={styles.boundSerialHeaderRow}>
+                          <View style={styles.boundSerialTitleWrap}>
+                            <Text style={styles.boundSerialIcon}>🔑</Text>
+                            <Text style={styles.boundSerialTitle}>Switch Password</Text>
+                          </View>
+                          {Boolean(switchPassword) && (
+                            <TouchableOpacity
+                              style={styles.clearSerialBtn}
+                              onPress={() => handleSwitchPasswordChange('')}
+                              activeOpacity={0.7}>
+                              <Text style={styles.clearSerialBtnText}>✕ Clear</Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                        <View style={styles.passwordInputRow}>
+                          <TextInput
+                            style={styles.passwordTextInput}
+                            placeholder="Enter Switch Password (or leave empty)"
+                            placeholderTextColor="#94A3B8"
+                            value={switchPassword}
+                            onChangeText={handleSwitchPasswordChange}
+                            autoCapitalize="none"
+                            autoCorrect={false}
+                            secureTextEntry={!showSwitchPassword}
+                          />
+                          <TouchableOpacity
+                            style={styles.passwordVisibilityBtn}
+                            onPress={() => setShowSwitchPassword(!showSwitchPassword)}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                            <Text style={styles.passwordVisibilityText}>
+                              {showSwitchPassword ? '👁️' : '👁️‍🗨️'}
+                            </Text>
+                          </TouchableOpacity>
+                        </View>
+                        <Text style={styles.passwordNoteText}>
+                          ℹ️ Switch password is not yet captured. If entered, it will be saved; otherwise submitted as null.
+                        </Text>
+                      </View>
+                    )}
 
                     <View style={styles.boundPhotoSectionDivider}>
                       <Text style={styles.boundPhotoSectionTitle}>
@@ -1621,6 +1758,46 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
             ℹ️ Enter the firmware version running on the hardware switch.
           </Text>
         </View>
+
+        {/* Switch Password (shown here if Switch card #11 is not in remaining photo types and SwitchPassword is null) */}
+        {!hasSwitchInPending && !isSwitchPasswordCaptured && (
+          <View style={[styles.hardwareInputGroup, { marginTop: 14 }]}>
+            <View style={styles.hardwareLabelRow}>
+              <Text style={styles.hardwareLabel}>🔑 Switch Password</Text>
+              {Boolean(switchPassword) && (
+                <TouchableOpacity
+                  style={styles.clearSerialBtn}
+                  onPress={() => handleSwitchPasswordChange('')}
+                  activeOpacity={0.7}>
+                  <Text style={styles.clearSerialBtnText}>✕ Clear</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+            <View style={styles.passwordInputRow}>
+              <TextInput
+                style={styles.passwordTextInput}
+                placeholder="Enter Switch Password (or leave empty)"
+                placeholderTextColor="#94A3B8"
+                value={switchPassword}
+                onChangeText={handleSwitchPasswordChange}
+                autoCapitalize="none"
+                autoCorrect={false}
+                secureTextEntry={!showSwitchPassword}
+              />
+              <TouchableOpacity
+                style={styles.passwordVisibilityBtn}
+                onPress={() => setShowSwitchPassword(!showSwitchPassword)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Text style={styles.passwordVisibilityText}>
+                  {showSwitchPassword ? '👁️' : '👁️‍🗨️'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.passwordNoteText}>
+              ℹ️ Switch password is not yet captured. If entered, it will be saved; otherwise submitted as null.
+            </Text>
+          </View>
+        )}
       </View>
 
       {/* Substation Proximity & Auto Remarks Card (replaces manual remarks field) */}
@@ -1825,6 +2002,19 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
           </View>
         </View>
       </Modal>
+
+      {/* Annexure-11 Certificate Modal */}
+      <AnnexureModal
+        visible={showAnnexureModal}
+        station={station}
+        onClose={() => setShowAnnexureModal(false)}
+      />
+
+      {/* Switch Firmware & Config Modal */}
+      <SwitchFilesModal
+        visible={showSwitchFilesModal}
+        onClose={() => setShowSwitchFilesModal(false)}
+      />
     </View>
   );
 };
@@ -2885,5 +3075,115 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '700',
+  },
+  annexureActionCardBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1.5,
+    borderColor: '#93C5FD',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginTop: 8,
+    marginBottom: 8,
+    gap: 10,
+  },
+  annexureActionCardBtnIcon: {
+    fontSize: 22,
+  },
+  annexureActionCardBtnTexts: {
+    flex: 1,
+  },
+  annexureActionCardBtnTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1D4ED8',
+    marginBottom: 2,
+  },
+  annexureActionCardBtnSub: {
+    fontSize: 11,
+    color: '#475569',
+    lineHeight: 15,
+  },
+  annexureActionCardBtnArrow: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#2563EB',
+  },
+  switchFilesCardBtn: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  switchFilesCardLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flex: 1,
+  },
+  switchFilesCardIcon: {
+    fontSize: 16,
+  },
+  switchFilesCardTexts: {
+    flex: 1,
+  },
+  switchFilesCardTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  switchFilesCardSub: {
+    fontSize: 10.5,
+    color: '#64748B',
+    marginTop: 1,
+  },
+  switchFilesCardArrow: {
+    fontSize: 12,
+    color: '#475569',
+    fontWeight: '700',
+    marginLeft: 6,
+  },
+  boundPasswordContainer: {
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#E2E8F0',
+  },
+  passwordInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
+    borderColor: '#CBD5E1',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+  },
+  passwordTextInput: {
+    flex: 1,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: '#0F172A',
+    fontWeight: '600',
+  },
+  passwordVisibilityBtn: {
+    padding: 6,
+    marginLeft: 4,
+  },
+  passwordVisibilityText: {
+    fontSize: 18,
+  },
+  passwordNoteText: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 4,
+    lineHeight: 15,
   },
 });
