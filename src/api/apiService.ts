@@ -31,7 +31,7 @@ import {
 } from '../types';
 
 const ENDPOINTS = [
-  'http://192.168.23.87:5080/rna-service',
+  'https://rna.vishvin.com/api/rna-service',
 ];
 
 let activeEndpointIndex = 0;
