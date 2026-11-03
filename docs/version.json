@@ -1,8 +1,8 @@
 {
-  "versionCode": 9,
-  "versionName": "1.9",
+  "versionCode": 10,
+  "versionName": "2.0",
   "mandatory": true,
-  "releaseNotes": "Vendor app version 1.9",
+  "releaseNotes": "Vendor app version 2.0",
   "apkUrl": "https://github.com/chethanvishvin/vendor/releases/latest/download/vendor-release.apk",
-  "sha256": "94981b2be6a8b2e4a8b163264ad97744235f422a13ab8e73e2d712a29480a687"
+  "sha256": "7e96fca715931beaa43f104c90e6af9727785ff0e93c11c99f7198530bbf445a"
 }
