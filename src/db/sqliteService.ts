@@ -376,6 +376,26 @@ export const getLastSyncMetadata = async (): Promise<{
 };
 
 /**
+ * Flush all pending station details stored in SQLite upon user logout.
+ * Clears ONLY the pending_stations table and its sync metadata,
+ * preserving all offline submissions, drafts, and cache.
+ */
+export const flushPendingStationsFromSQLite = async (): Promise<boolean> => {
+  try {
+    const db = await getDatabase();
+    await db.transaction(async tx => {
+      await tx.execute('DELETE FROM pending_stations;');
+      await tx.execute("DELETE FROM sync_meta WHERE key = 'last_pending_sync';");
+    });
+    console.log('[SQLite] Successfully flushed pending station details on logout.');
+    return true;
+  } catch (error) {
+    console.error('[SQLite] Error flushing pending stations on logout:', error);
+    return false;
+  }
+};
+
+/**
  * Ensures an image URI has a valid scheme (file://, content://, http://, https://)
  * so that React Native Image and Fresco can display local Android file paths.
  */

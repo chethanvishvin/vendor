@@ -139,6 +139,24 @@ export const apiService = {
 
     const data = await response.json();
     if (!response.ok || !data.status) {
+      const msg = (data?.message || '').toLowerCase();
+      if (
+        msg.includes('no data') ||
+        msg.includes('not found') ||
+        msg.includes('no assignment') ||
+        msg.includes('not assigned') ||
+        msg.includes('no record') ||
+        msg.includes('empty')
+      ) {
+        return {
+          status: true,
+          message: data?.message || 'No assignments found',
+          result: {
+            vendor: data?.result?.vendor || ({} as any),
+            assignments: [],
+          },
+        };
+      }
       throw new Error(
         data.message || 'Failed to fetch vendor assignments details from server.',
       );
@@ -164,6 +182,21 @@ export const apiService = {
 
     const data = await response.json();
     if (!response.ok || !data.status) {
+      const msg = (data?.message || '').toLowerCase();
+      if (
+        msg.includes('no data') ||
+        msg.includes('not found') ||
+        msg.includes('no completed') ||
+        msg.includes('not assigned') ||
+        msg.includes('no record') ||
+        msg.includes('empty')
+      ) {
+        return {
+          status: true,
+          message: data?.message || 'No completed stations',
+          data: [],
+        };
+      }
       throw new Error(
         data.message || 'Failed to fetch completed stations from server.',
       );
@@ -637,6 +670,17 @@ export const apiService = {
     }
     if (data && data.status && Array.isArray(data.result)) {
       return data.result;
+    }
+    const msg = (data?.message || '').toLowerCase();
+    if (
+      msg.includes('no data') ||
+      msg.includes('not found') ||
+      msg.includes('no pending') ||
+      msg.includes('not assigned') ||
+      msg.includes('no record') ||
+      msg.includes('empty')
+    ) {
+      return [];
     }
     if (!response.ok) {
       throw new Error(data.message || 'Failed to fetch pending stations for worker.');

@@ -21,7 +21,7 @@ import { HomeScreen } from './src/screens/HomeScreen';
 import { MandatoryUpdateScreen } from './src/screens/MandatoryUpdateScreen';
 import { NetworkStatusBar } from './src/components/NetworkStatusBar';
 import { VendorProfile } from './src/types';
-import { syncAllOfflineSubmissions } from './src/db/sqliteService';
+import { syncAllOfflineSubmissions, flushPendingStationsFromSQLite } from './src/db/sqliteService';
 import {
   checkAppUpdate,
   UpdateCheckResult,
@@ -43,6 +43,11 @@ export default function App() {
 
   // Core update check function: Only checks when internet connection is available
   const runUpdateCheck = useCallback(async (showSplash = false) => {
+    if (__DEV__) {
+      setUpdateResult({ status: 'UP_TO_DATE' });
+      setIsCheckingUpdate(false);
+      return;
+    }
     try {
       const netState = await NetInfo.fetch();
       const isOnline = Boolean(
@@ -177,6 +182,11 @@ export default function App() {
   };
 
   const handleLogout = async () => {
+    try {
+      await flushPendingStationsFromSQLite();
+    } catch (e) {
+      console.warn('[Logout] Error flushing pending stations:', e);
+    }
     try {
       await AsyncStorage.removeItem(SESSION_KEY);
     } catch (_) {}

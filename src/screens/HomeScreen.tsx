@@ -45,6 +45,7 @@ import {
   addOfflineQueueListener,
   syncAllOfflineSubmissions,
   saveCachedFileTypes,
+  flushPendingStationsFromSQLite,
 } from '../db/sqliteService';
 
 interface HomeScreenProps {
@@ -539,6 +540,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         setActiveTab('completed');
       }
 
+      const isApiConnected =
+        pendingRes.status === 'fulfilled' || completedRes.status === 'fulfilled';
+
       if (!hasData) {
         // Fallback: load pending stations from local SQLite database
         const localPending = await getPendingStationsFromSQLite(vendorId);
@@ -564,12 +568,52 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               ToastAndroid.SHORT,
             );
           }
+          setErrorMessage(null);
+        } else if (!isApiConnected) {
+          // Both API calls failed to connect to server and no offline cache exists
+          const pendingErr =
+            pendingRes.status === 'rejected'
+              ? pendingRes.reason?.message || ''
+              : '';
+          setErrorMessage(
+            pendingErr || 'Unable to connect to RNA service. Please check network.',
+          );
         } else {
-          setErrorMessage('Failed to connect to RNA service. Please check network.');
+          // Connected to server successfully, but 0 stations or assignments exist for this user
+          setErrorMessage(null);
         }
+      } else {
+        setErrorMessage(null);
       }
     } catch (err: any) {
-      setErrorMessage(err.message || 'Failed to fetch assignments from RNA service.');
+      const localPending = await getPendingStationsFromSQLite(vendorId);
+      if (localPending.length > 0) {
+        setDataResult({
+          assignments: [
+            {
+              vendorAssignmentId: 0,
+              stations: localPending,
+            } as any,
+          ],
+        } as any);
+        setErrorMessage(null);
+      } else {
+        const msg = (err?.message || '').toLowerCase();
+        if (
+          msg.includes('no data') ||
+          msg.includes('not found') ||
+          msg.includes('not assigned') ||
+          msg.includes('no assignment') ||
+          msg.includes('empty')
+        ) {
+          // Server explicitly returned that no assignments are found
+          setErrorMessage(null);
+        } else {
+          setErrorMessage(
+            err.message || 'Unable to connect to RNA service. Please check network.',
+          );
+        }
+      }
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
@@ -596,7 +640,12 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
       {
         text: 'Sign Out',
         style: 'destructive',
-        onPress: onLogout,
+        onPress: async () => {
+          try {
+            await flushPendingStationsFromSQLite();
+          } catch (_) {}
+          onLogout();
+        },
       },
     ]);
   };
@@ -1473,14 +1522,51 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         allAssignedStations.length === 0 &&
         completedStations.length === 0 ? (
         <View style={styles.errorContainer}>
-          <Text style={styles.errorEmoji}>⚠️</Text>
-          <Text style={styles.errorTitle}>Unable to Load Data</Text>
-          <Text style={styles.errorSub}>{errorMessage}</Text>
-          <TouchableOpacity
-            style={styles.retryBtn}
-            onPress={() => fetchAllData(selectedVendorId)}>
-            <Text style={styles.retryBtnText}>Retry Connection</Text>
-          </TouchableOpacity>
+          {/* Top Header so user can always see who is logged in and can sign out */}
+          <View style={styles.topBar}>
+            <View style={styles.vendorIdentity}>
+              <View style={[styles.avatarPill, isWorker && styles.avatarPillWorker]}>
+                <Text style={styles.avatarText}>
+                  {isWorker
+                    ? (currentVendor.UserName || 'WK').substring(0, 2).toUpperCase()
+                    : (currentVendor.VendorName || currentVendor.CompanyName || 'VP').substring(0, 2).toUpperCase()}
+                </Text>
+              </View>
+              <View style={styles.vendorTextWrap}>
+                <Text style={styles.vendorCompany} numberOfLines={1}>
+                  {vendorDisplayName}
+                </Text>
+                <Text style={styles.vendorUser} numberOfLines={1}>
+                  {isWorker
+                    ? `👷 ${currentVendor.UserName || 'Worker'} (ID #${currentVendor.VendorWorkerId || currentVendor.VendorId})`
+                    : `👤 ${currentVendor.VendorName || currentVendor.ContactPerson || 'Vendor'} (ID #${currentVendor.VendorId})`}
+                </Text>
+              </View>
+            </View>
+            <TouchableOpacity
+              style={styles.logoutBtn}
+              onPress={handleConfirmLogout}
+              activeOpacity={0.7}>
+              <Text style={styles.logoutBtnText}>Logout</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={styles.errorContentBody}>
+            <Text style={styles.errorEmoji}>📡</Text>
+            <Text style={styles.errorTitle}>Unable to Connect</Text>
+            <Text style={styles.errorSub}>{errorMessage}</Text>
+            <View style={styles.errorActionsRow}>
+              <TouchableOpacity
+                style={styles.retryBtn}
+                onPress={() => fetchAllData(selectedVendorId)}>
+                <Text style={styles.retryBtnText}>↻ Retry Connection</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.errorLogoutBtn}
+                onPress={handleConfirmLogout}>
+                <Text style={styles.errorLogoutBtnText}>Sign Out</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
         </View>
       ) : (
         <FlatList
@@ -1517,25 +1603,47 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             />
           }
           ListEmptyComponent={
-            <View style={styles.emptyContainer}>
-              <Text style={styles.emptyEmoji}>
-                {activeTab === 'completed' ? '🏁' : '⏳'}
-              </Text>
-              <Text style={styles.emptyTitle}>
-                {searchQuery
-                  ? 'No Stations Found'
-                  : activeTab === 'completed'
-                    ? 'No Completed Stations'
-                    : 'No Pending Stations'}
-              </Text>
-              <Text style={styles.emptySub}>
-                {searchQuery
-                  ? 'No stations match your current search or voltage filter.'
-                  : activeTab === 'completed'
-                    ? `No verified completed installations on record for ${vendorDisplayName}.`
-                    : `All stations are currently completed or none are pending installation for ${vendorDisplayName}.`}
-              </Text>
-            </View>
+            allAssignedStations.length === 0 &&
+            completedStations.length === 0 &&
+            !searchQuery ? (
+              <View style={styles.noDataAssignedContainer}>
+                <View style={styles.noDataAssignedIconWrap}>
+                  <Text style={styles.noDataAssignedIcon}>📋</Text>
+                </View>
+                <Text style={styles.noDataAssignedTitle}>Nothing Has Been Assigned</Text>
+                <Text style={styles.noDataAssignedSubtitle}>
+                  {isWorker
+                    ? 'No substations have been assigned to your worker account yet.\nPlease contact your vendor administrator to assign substations.'
+                    : 'No substation installations or assignments have been allocated to your vendor account yet.\nPlease contact the administrator or check back later.'}
+                </Text>
+                <TouchableOpacity
+                  style={styles.noDataRefreshBtn}
+                  onPress={() => fetchAllData(selectedVendorId)}
+                  activeOpacity={0.8}>
+                  <Text style={styles.noDataRefreshBtnText}>↻ Check for Assignments</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <View style={styles.emptyContainer}>
+                <Text style={styles.emptyEmoji}>
+                  {activeTab === 'completed' ? '🏁' : '⏳'}
+                </Text>
+                <Text style={styles.emptyTitle}>
+                  {searchQuery
+                    ? 'No Stations Found'
+                    : activeTab === 'completed'
+                      ? 'No Completed Stations'
+                      : 'No Pending Stations'}
+                </Text>
+                <Text style={styles.emptySub}>
+                  {searchQuery
+                    ? 'No stations match your current search or voltage filter.'
+                    : activeTab === 'completed'
+                      ? `No verified completed installations on record for ${vendorDisplayName}.`
+                      : `All stations are currently completed or none are pending installation for ${vendorDisplayName}.`}
+                </Text>
+              </View>
+            )
           }
         />
       )}
@@ -2293,12 +2401,16 @@ const styles = StyleSheet.create({
   },
   errorContainer: {
     flex: 1,
+    backgroundColor: '#F8FAFC',
+  },
+  errorContentBody: {
+    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 30,
   },
   errorEmoji: {
-    fontSize: 36,
+    fontSize: 44,
     marginBottom: 12,
   },
   errorTitle: {
@@ -2313,14 +2425,94 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 20,
     lineHeight: 18,
+    maxWidth: 320,
+  },
+  errorActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
   },
   retryBtn: {
-    backgroundColor: '#2563EB',
+    backgroundColor: '#0284C7',
     paddingHorizontal: 20,
     paddingVertical: 10,
     borderRadius: 10,
   },
   retryBtnText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  errorLogoutBtn: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  errorLogoutBtnText: {
+    color: '#DC2626',
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  noDataAssignedContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 45,
+    paddingHorizontal: 24,
+    marginHorizontal: 16,
+    marginVertical: 16,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: '#CBD5E1',
+    borderStyle: 'dashed',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 1,
+  },
+  noDataAssignedIconWrap: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
+  },
+  noDataAssignedIcon: {
+    fontSize: 32,
+  },
+  noDataAssignedTitle: {
+    color: '#0F172A',
+    fontSize: 18,
+    fontWeight: '700',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  noDataAssignedSubtitle: {
+    color: '#64748B',
+    fontSize: 13,
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 20,
+    maxWidth: 320,
+  },
+  noDataRefreshBtn: {
+    backgroundColor: '#0284C7',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 10,
+    shadowColor: '#0284C7',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  noDataRefreshBtnText: {
     color: '#FFFFFF',
     fontWeight: '700',
     fontSize: 13,
