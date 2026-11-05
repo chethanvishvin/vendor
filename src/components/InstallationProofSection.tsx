@@ -1833,9 +1833,9 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
 
         {hasSubCoords ? (
           <View style={styles.autoAuditDetailRow}>
-            <Text style={styles.autoAuditCoordsText}>
+            {/* <Text style={styles.autoAuditCoordsText}>
               Substation GPS: {subLat.toFixed(5)}°, {subLon.toFixed(5)}°
-            </Text>
+            </Text> */}
             {overallAvgDistance !== null && (
               <Text style={styles.autoAuditDistanceText}>
                 Distance: {overallAvgDistance}m {isOverallWithin300m ? '(Inside 300m)' : '(Exceeds 300m)'}
@@ -1847,15 +1847,6 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
             Substation coordinates not provided in system. Captured photo GPS will be logged directly.
           </Text>
         )}
-
-        <View style={styles.autoAuditFooterRow}>
-          <Text style={styles.autoAuditNoteText}>
-            🤖 Audit remarks are generated and validated automatically in the background.
-          </Text>
-          {uploadedCategoryCount > 0 && (
-            <Text style={styles.autoAuditSavedText}>✓ SQLite Auto-Draft</Text>
-          )}
-        </View>
       </View>
 
       {/* Submit Button */}
@@ -1877,8 +1868,8 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
         ) : (
           <Text style={styles.submitButtonText}>
             {isDraftStation
-              ? `📤 Submit Draft Progress (${uploadedCategoryCount}/${totalCount} Categories • ${totalPhotosCount} Photos)`
-              : `📤 Submit Installation Proof (${uploadedCategoryCount}/${totalCount} Categories • ${totalPhotosCount} Photos)`}
+              ? `📤 Submit `
+              : `📤 Submit `}
           </Text>
         )}
       </TouchableOpacity>
@@ -3050,12 +3041,12 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
   submitButton: {
-    backgroundColor: '#10B981',
+    backgroundColor: '#2563EB',
     paddingVertical: 14,
     borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#10B981',
+    shadowColor: '#1D4ED8',
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.25,
     shadowRadius: 5,
