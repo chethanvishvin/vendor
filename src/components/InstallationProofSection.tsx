@@ -1860,7 +1860,7 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
         activeOpacity={0.85}>
         {isSubmitting ? (
           <View style={styles.submitRow}>
-            <ActivityIndicator size="small" color="#FFFFFF" />
+            <ActivityIndicator size="small" color="#1F2937" />
             <Text style={styles.submitButtonText}>
               Submitting Proof (&lt; 1MB Photos)...
             </Text>
@@ -3041,19 +3041,21 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
   submitButton: {
-    backgroundColor: '#2563EB',
-    paddingVertical: 14,
-    borderRadius: 12,
+    backgroundColor: '#FACC15',
+    paddingVertical: 18,
+    paddingHorizontal: 24,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#1D4ED8',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.25,
-    shadowRadius: 5,
-    elevation: 3,
+    minHeight: 60,
+    shadowColor: '#CA8A04',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 5,
   },
   submitButtonDisabled: {
-    backgroundColor: '#94A3B8',
+    backgroundColor: '#CBD5E1',
     shadowOpacity: 0,
     elevation: 0,
   },
@@ -3063,9 +3065,9 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   submitButtonText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '700',
+    color: '#1F2937',
+    fontSize: 17,
+    fontWeight: '800',
   },
   annexureActionCardBtn: {
     flexDirection: 'row',
