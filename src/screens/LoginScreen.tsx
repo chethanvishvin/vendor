@@ -172,6 +172,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
               resizeMode="contain"
             />
           </View>
+          <Text style={[styles.companyName, isKeyboardVisible && styles.companyNameCompact]}>
+            Vishvin Technologies Pvt Ltd
+          </Text>
           <Text style={styles.portalTag}>RNA SERVICE PLATFORM</Text>
           <Text style={[styles.brandTitle, isKeyboardVisible && styles.brandTitleCompact]}>Vendor Portal</Text>
           {!isKeyboardVisible && (
@@ -341,6 +344,18 @@ const styles = StyleSheet.create({
   logoImage: {
     width: '100%',
     height: '100%',
+  },
+  companyName: {
+    color: '#0F172A',
+    fontSize: 16,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+    marginBottom: 6,
+    textAlign: 'center',
+  },
+  companyNameCompact: {
+    fontSize: 13,
+    marginBottom: 3,
   },
   portalTag: {
     color: '#2563EB',

@@ -181,6 +181,8 @@ export interface CompletedStationItem {
   VendorStatusName?: string;
   PendingFileTypes?: VendorFileType[];
   WorkerName?: string | null;
+  WorkerMobileNumber?: string | null;
+  WorkerStationAssignmentId?: number | null;
   WorkerId?: number;
 }
 
@@ -188,6 +190,13 @@ export interface FetchCompletedStationsResponse {
   status: boolean;
   message: string;
   data: CompletedStationItem[];
+}
+
+export interface ApkFetchCompletedStationResponse {
+  status: boolean;
+  message: string;
+  totalCompletedStations: number;
+  result: CompletedStationItem[];
 }
 
 export interface DashboardCountData {

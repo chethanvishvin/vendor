@@ -103,11 +103,13 @@ const PhotoThumbnail: React.FC<PhotoItemProps> = ({ file, isWorker = false, onPr
 interface InstallationPhotoGalleryProps {
   files: CompletedStationFile[];
   isWorker?: boolean;
+  onReupload?: (file: CompletedStationFile) => void;
 }
 
 export const InstallationPhotoGallery: React.FC<InstallationPhotoGalleryProps> = ({
   files,
   isWorker = false,
+  onReupload,
 }) => {
   const [activePhoto, setActivePhoto] = useState<{
     uri: string;
@@ -178,11 +180,25 @@ export const InstallationPhotoGallery: React.FC<InstallationPhotoGalleryProps> =
             ) : null}
           </View>
 
-          {/* Footer info */}
+          {/* Footer info & Re-upload action */}
           <View style={styles.fullscreenFooter}>
             <Text style={styles.fullscreenFooterText}>
               File ID #{activePhoto?.file.installationSubmissionFileId} • Type #{activePhoto?.file.fileTypeId}
             </Text>
+            {Boolean(onReupload) && (
+              <TouchableOpacity
+                style={styles.fullscreenReuploadBtn}
+                onPress={() => {
+                  if (activePhoto && onReupload) {
+                    const f = activePhoto.file;
+                    setActivePhoto(null);
+                    onReupload(f);
+                  }
+                }}
+                activeOpacity={0.8}>
+                <Text style={styles.fullscreenReuploadBtnText}>🔄 Re-upload This Photo</Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
       </Modal>
@@ -325,9 +341,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderTopWidth: 1,
     borderTopColor: '#1E293B',
+    gap: 12,
   },
   fullscreenFooterText: {
     color: '#64748B',
     fontSize: 12,
+  },
+  fullscreenReuploadBtn: {
+    backgroundColor: '#FACC15',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fullscreenReuploadBtnText: {
+    color: '#1F2937',
+    fontSize: 13,
+    fontWeight: '800',
   },
 });

@@ -15,6 +15,7 @@ import { InstallationPhotoGallery } from '../components/InstallationPhotoGallery
 import { InstallationProofSection } from '../components/InstallationProofSection';
 import { AnnexureModal } from '../components/AnnexureModal';
 import { SwitchFilesModal } from '../components/SwitchFilesModal';
+import { ReUploadPhotoModal } from '../components/ReUploadPhotoModal';
 
 interface StationDetailScreenProps {
   station: StationItem | CompletedStationItem;
@@ -33,6 +34,8 @@ export const StationDetailScreen: React.FC<StationDetailScreenProps> = ({
 }) => {
   const [showAnnexureModal, setShowAnnexureModal] = React.useState(false);
   const [showSwitchFilesModal, setShowSwitchFilesModal] = React.useState(false);
+  const [showReuploadModal, setShowReuploadModal] = React.useState(false);
+  const [selectedReuploadFileTypeId, setSelectedReuploadFileTypeId] = React.useState<number | null>(null);
 
   // Handle Android hardware back button
   useEffect(() => {
@@ -92,6 +95,18 @@ export const StationDetailScreen: React.FC<StationDetailScreenProps> = ({
     currentVendor?.userType === 'VendorWorker' ||
     Boolean(currentVendor?.VendorWorkerId) ||
     Boolean((currentVendor as any)?.WorkerId);
+
+  const submissionId =
+    station.InstallationSubmissionId ||
+    (station as any).StationSubmissionId ||
+    (station as any).installationSubmissionId ||
+    0;
+
+  const hasInstallationSubmission = Boolean(
+    submissionId ||
+    (station as any).files?.length > 0 ||
+    isCompleted,
+  );
 
   const isHighVoltage = station.VoltageClass === '220' || station.VoltageClass === '400';
 
@@ -201,6 +216,8 @@ export const StationDetailScreen: React.FC<StationDetailScreenProps> = ({
           <Text style={styles.switchFilesBannerArrow}>➔</Text>
         </TouchableOpacity>
 
+
+
         {/* Assigned Field Worker Card (For Vendor View) */}
         {!isWorker && 'WorkerName' in station && station.WorkerName && station.WorkerName !== 'null' ? (
           <View style={styles.card}>
@@ -303,6 +320,10 @@ export const StationDetailScreen: React.FC<StationDetailScreenProps> = ({
             <InstallationPhotoGallery
               files={(station as any).files || []}
               isWorker={isWorker}
+              onReupload={file => {
+                setSelectedReuploadFileTypeId(file.fileTypeId);
+                setShowReuploadModal(true);
+              }}
             />
           </View>
         )}
@@ -421,6 +442,21 @@ export const StationDetailScreen: React.FC<StationDetailScreenProps> = ({
         visible={showSwitchFilesModal}
         onClose={() => setShowSwitchFilesModal(false)}
       />
+
+      {/* Re-Upload Photo Modal */}
+      {currentVendor && (
+        <ReUploadPhotoModal
+          visible={showReuploadModal}
+          station={station}
+          currentVendor={currentVendor}
+          isWorker={isWorker}
+          initialFileTypeId={selectedReuploadFileTypeId}
+          onClose={() => setShowReuploadModal(false)}
+          onSuccess={() => {
+            onSubmissionSuccess();
+          }}
+        />
+      )}
     </View>
   );
 };
@@ -802,6 +838,56 @@ const styles = StyleSheet.create({
     shadowRadius: 3,
     elevation: 1.5,
     gap: 10,
+  },
+  reuploadBannerCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    marginBottom: 10,
+    borderWidth: 1.5,
+    borderColor: '#FDE047',
+    flexDirection: 'row',
+    alignItems: 'center',
+    shadowColor: '#CA8A04',
+    shadowOffset: { width: 0, height: 1.5 },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+    elevation: 2,
+    gap: 10,
+  },
+  reuploadBannerIconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: 7,
+    backgroundColor: '#FEF9C3',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  reuploadBannerIcon: {
+    fontSize: 16,
+  },
+  reuploadBannerTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#854D0E',
+    marginRight: 6,
+  },
+  reuploadActionBadge: {
+    backgroundColor: '#FEF08A',
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 4,
+  },
+  reuploadActionBadgeText: {
+    fontSize: 9.5,
+    fontWeight: '700',
+    color: '#713F12',
+  },
+  reuploadBannerArrow: {
+    fontSize: 13,
+    color: '#CA8A04',
+    fontWeight: '700',
   },
   switchFilesBannerIconWrap: {
     width: 32,

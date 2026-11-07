@@ -36,6 +36,7 @@ import { VendorWorkersScreen } from './VendorWorkersScreen';
 import { CompletedStationCard } from '../components/CompletedStationCard';
 import { AnnexureModal } from '../components/AnnexureModal';
 import { SwitchFilesModal } from '../components/SwitchFilesModal';
+import { ReUploadScreen } from './ReUploadScreen';
 import NetInfo from '@react-native-community/netinfo';
 import {
   syncPendingStationsToSQLite,
@@ -119,6 +120,10 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   const [workersInitialTab, setWorkersInitialTab] = useState<'list' | 'assign' | 'assigned' | 'create'>('list');
   const [showBatchAnnexureModal, setShowBatchAnnexureModal] = useState<boolean>(false);
   const [showSwitchFilesModal, setShowSwitchFilesModal] = useState<boolean>(false);
+
+  // Re-upload separate screen state
+  const [showReUploadScreen, setShowReUploadScreen] = useState<boolean>(false);
+  const [reuploadTargetStationId, setReuploadTargetStationId] = useState<number | null>(null);
 
   // Single station worker assignment state
   const [assignModalStation, setAssignModalStation] = useState<StationItem | null>(null);
@@ -1106,6 +1111,33 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           </View>
           <Text style={styles.dbSyncSwitchArrow}>➔</Text>
         </TouchableOpacity>
+
+        {/* Photo Re-Upload & Replacement Screen Button */}
+        <TouchableOpacity
+          style={styles.dbSyncReUploadBtn}
+          onPress={() => {
+            setReuploadTargetStationId(null);
+            setShowReUploadScreen(true);
+          }}
+          activeOpacity={0.85}>
+          <View style={styles.dbSyncAnnexureLeft}>
+            <View style={styles.dbSyncReUploadIconWrap}>
+              <Text style={styles.dbSyncAnnexureIcon}>🔄</Text>
+            </View>
+            <View style={styles.dbSyncAnnexureTexts}>
+              <View style={styles.dbSyncAnnexureTitleRow}>
+                <Text style={styles.dbSyncReUploadTitle}>Photo Re-Upload / Replacement</Text>
+                <View style={styles.dbSyncReUploadBadge}>
+                  <Text style={styles.dbSyncReUploadBadgeText}>Dedicated Screen</Text>
+                </View>
+              </View>
+              <Text style={styles.dbSyncSwitchSub} numberOfLines={1}>
+                View completed stations • Replace individual photos with GPS watermark
+              </Text>
+            </View>
+          </View>
+          <Text style={styles.dbSyncSwitchArrow}>➔</Text>
+        </TouchableOpacity>
       </View>
 
       {/* Metric Counters Banner */}
@@ -1446,6 +1478,22 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         currentVendor={currentVendor}
         initialTab={workersInitialTab}
         onBack={() => setShowWorkersScreen(false)}
+      />
+    );
+  }
+
+  if (showReUploadScreen) {
+    return (
+      <ReUploadScreen
+        currentVendor={currentVendor}
+        isWorker={isWorker}
+        initialStationId={reuploadTargetStationId}
+        onBack={() => {
+          setShowReUploadScreen(false);
+          setReuploadTargetStationId(null);
+          fetchAllData(selectedVendorId, false);
+          fetchDashboardCounts(selectedVendorId);
+        }}
       />
     );
   }
@@ -2841,6 +2889,46 @@ const styles = StyleSheet.create({
     color: '#475569',
     fontWeight: '700',
     marginLeft: 6,
+  },
+  dbSyncReUploadBtn: {
+    marginTop: 8,
+    backgroundColor: '#FEF9C3',
+    borderWidth: 1,
+    borderColor: '#FACC15',
+    borderRadius: 10,
+    paddingVertical: 9,
+    paddingHorizontal: 11,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  dbSyncReUploadIconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: 7,
+    backgroundColor: '#FEF08A',
+    borderWidth: 1,
+    borderColor: '#EAB308',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dbSyncReUploadTitle: {
+    fontSize: 12.5,
+    fontWeight: '700',
+    color: '#854D0E',
+  },
+  dbSyncReUploadBadge: {
+    backgroundColor: '#FEF08A',
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 4,
+    borderWidth: 0.5,
+    borderColor: '#EAB308',
+  },
+  dbSyncReUploadBadgeText: {
+    fontSize: 9.5,
+    fontWeight: '700',
+    color: '#854D0E',
   },
   queueBtn: {
     flex: 1,

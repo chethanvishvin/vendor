@@ -234,6 +234,7 @@ export const MandatoryUpdateScreen: React.FC<MandatoryUpdateScreenProps> = ({
               resizeMode="contain"
             />
           </View>
+          <Text style={styles.companyName}>Vishvin Technologies Pvt Ltd</Text>
           <View style={styles.mandatoryBadge}>
             <Text style={styles.mandatoryBadgeText}>CRITICAL UPDATE REQUIRED</Text>
           </View>
@@ -420,6 +421,14 @@ const styles = StyleSheet.create({
   logoImage: {
     width: 48,
     height: 48,
+  },
+  companyName: {
+    color: '#0F172A',
+    fontSize: 16,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+    marginBottom: 14,
+    textAlign: 'center',
   },
   mandatoryBadge: {
     backgroundColor: '#FEF2F2',

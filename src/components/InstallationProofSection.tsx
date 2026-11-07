@@ -23,7 +23,6 @@ import { apiService } from '../api/apiService';
 import NetInfo from '@react-native-community/netinfo';
 import { StationItem, VendorFileType, VendorProfile, DEFAULT_FILE_TYPES } from '../types';
 import { AnnexureModal } from './AnnexureModal';
-import { SwitchFilesModal } from './SwitchFilesModal';
 import {
   saveDraftPhoto,
   saveDraftHardwareDetails,
@@ -144,6 +143,27 @@ export const normalizeSerial = (val?: string | null): string => {
     .replace(/^(SN|S\/N|SL\s*NO|SLNO)\s*[:.\-]?\s*/i, '')
     .replace(/[\s\-_]/g, '')
     .trim();
+};
+
+/**
+ * Normalizes and extracts valid serial numbers from API / station record,
+ * ignoring empty, missing or placeholder values like N/A, NA, null, undefined, '-'
+ */
+export const getApiSerialNumber = (val?: string | null): string => {
+  if (!val) return '';
+  const trimmed = String(val).trim();
+  const upper = trimmed.toUpperCase();
+  if (
+    upper === 'N/A' ||
+    upper === 'NA' ||
+    upper === 'NULL' ||
+    upper === 'UNDEFINED' ||
+    upper === '-' ||
+    upper === 'NOT RECORDED'
+  ) {
+    return '';
+  }
+  return trimmed;
 };
 
 /**
@@ -533,7 +553,6 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
   const [geoTaggingId, setGeoTaggingId] = useState<number | null>(null);
   const [viewingPhoto, setViewingPhoto] = useState<ViewingPhotoInfo | null>(null);
   const [showAnnexureModal, setShowAnnexureModal] = useState<boolean>(false);
-  const [showSwitchFilesModal, setShowSwitchFilesModal] = useState<boolean>(false);
 
   // Hardware serial numbers & switch firmware state (auto-restored from SQLite cache)
   const rawStationPass =
@@ -550,9 +569,13 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
     String(rawStationPass).trim().toUpperCase() !== 'NA',
   );
 
-  // Never auto-populate switch & resilient serial numbers from the API in verification screen
-  const [switchSerialNumber, setSwitchSerialNumber] = useState<string>('');
-  const [resilientSerialNumber, setResilientSerialNumber] = useState<string>('');
+  // Hardware serial numbers populated from the API (station record)
+  const [switchSerialNumber, setSwitchSerialNumber] = useState<string>(() =>
+    getApiSerialNumber(station.SwitchSerialNumber || (station as any).switchSerialNumber),
+  );
+  const [resilientSerialNumber, setResilientSerialNumber] = useState<string>(() =>
+    getApiSerialNumber(station.ResilientSerialNumber || (station as any).resilientSerialNumber),
+  );
   const [switchFirmwareNumber, setSwitchFirmwareNumber] = useState<string>(() => {
     const fw = station.SwitchFirmWareNumber || (station as any).SwitchFirmwareNumber || '';
     return fw === 'N/A' || fw === 'NA' ? '' : fw;
@@ -590,58 +613,93 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
   useEffect(() => {
     let isMounted = true;
     getStationProofDraft(station.ExcelDataId, currentVendor.VendorId).then(draft => {
-      if (isMounted && draft.hasDraft) {
-        if (draft.photos && Object.keys(draft.photos).length > 0) {
-          const normalized: SelectedFileMap = {};
-          Object.keys(draft.photos).forEach(key => {
-            const fid = Number(key);
-            const val = (draft.photos as any)[fid];
-            if (Array.isArray(val)) {
-              normalized[fid] = val;
-            } else if (val && typeof val === 'object') {
-              normalized[fid] = [val];
-            }
-          });
-          setSelectedFiles(normalized);
-        }
-        // Restore cached Switch Serial Number and Resilient Serial Number from SQLite draft only if user typed them
-        // (Never auto-populate from API / pending station serial numbers)
-        const apiSw = String(station.SwitchSerialNumber || (station as any).switchSerialNumber || '').trim();
-        const apiRes = String(station.ResilientSerialNumber || (station as any).resilientSerialNumber || '').trim();
+      if (isMounted) {
+        if (draft.hasDraft) {
+          if (draft.photos && Object.keys(draft.photos).length > 0) {
+            const normalized: SelectedFileMap = {};
+            Object.keys(draft.photos).forEach(key => {
+              const fid = Number(key);
+              const val = (draft.photos as any)[fid];
+              if (Array.isArray(val)) {
+                normalized[fid] = val;
+              } else if (val && typeof val === 'object') {
+                normalized[fid] = [val];
+              }
+            });
+            setSelectedFiles(normalized);
+          }
+          // Restore Switch Serial Number and Resilient Serial Number:
+          // User-edited SQLite draft takes priority; otherwise ensure populated from API
+          const apiSw = getApiSerialNumber(
+            station.SwitchSerialNumber || (station as any).switchSerialNumber,
+          );
+          const apiRes = getApiSerialNumber(
+            station.ResilientSerialNumber || (station as any).resilientSerialNumber,
+          );
 
-        if (
-          draft.switchSerialNumber &&
-          draft.switchSerialNumber.trim().length > 0 &&
-          draft.switchSerialNumber.trim() !== apiSw
-        ) {
-          setSwitchSerialNumber(draft.switchSerialNumber.trim());
-        }
-        if (
-          draft.resilientSerialNumber &&
-          draft.resilientSerialNumber.trim().length > 0 &&
-          draft.resilientSerialNumber.trim() !== apiRes
-        ) {
-          setResilientSerialNumber(draft.resilientSerialNumber.trim());
-        }
-        if (draft.switchFirmwareNumber) {
-          const fw = draft.switchFirmwareNumber;
-          if (fw !== 'N/A' && fw !== 'NA') {
-            setSwitchFirmwareNumber(fw);
+          if (draft.switchSerialNumber && draft.switchSerialNumber.trim().length > 0) {
+            setSwitchSerialNumber(draft.switchSerialNumber.trim());
+          } else if (apiSw) {
+            setSwitchSerialNumber(apiSw);
           }
-        }
-        if (!isSwitchPasswordCaptured && (draft as any).switchPassword) {
-          const sp = String((draft as any).switchPassword).trim();
-          if (sp && sp !== 'null' && sp !== 'N/A' && sp !== 'NA') {
-            setSwitchPassword(sp);
+
+          if (draft.resilientSerialNumber && draft.resilientSerialNumber.trim().length > 0) {
+            setResilientSerialNumber(draft.resilientSerialNumber.trim());
+          } else if (apiRes) {
+            setResilientSerialNumber(apiRes);
           }
+
+          if (draft.switchFirmwareNumber) {
+            const fw = draft.switchFirmwareNumber;
+            if (fw !== 'N/A' && fw !== 'NA') {
+              setSwitchFirmwareNumber(fw);
+            }
+          }
+          if (!isSwitchPasswordCaptured && (draft as any).switchPassword) {
+            const sp = String((draft as any).switchPassword).trim();
+            if (sp && sp !== 'null' && sp !== 'N/A' && sp !== 'NA') {
+              setSwitchPassword(sp);
+            }
+          }
+          setIsDraftRestored(true);
+        } else {
+          // No SQLite draft: ensure populated from API
+          const apiSw = getApiSerialNumber(
+            station.SwitchSerialNumber || (station as any).switchSerialNumber,
+          );
+          const apiRes = getApiSerialNumber(
+            station.ResilientSerialNumber || (station as any).resilientSerialNumber,
+          );
+          if (apiSw) setSwitchSerialNumber(apiSw);
+          if (apiRes) setResilientSerialNumber(apiRes);
         }
-        setIsDraftRestored(true);
       }
     });
     return () => {
       isMounted = false;
     };
   }, [station.ExcelDataId, currentVendor.VendorId]);
+
+  // Sync state if station record updates asynchronously
+  useEffect(() => {
+    const apiSw = getApiSerialNumber(
+      station.SwitchSerialNumber || (station as any).switchSerialNumber,
+    );
+    const apiRes = getApiSerialNumber(
+      station.ResilientSerialNumber || (station as any).resilientSerialNumber,
+    );
+    if (apiSw) {
+      setSwitchSerialNumber(prev => (prev ? prev : apiSw));
+    }
+    if (apiRes) {
+      setResilientSerialNumber(prev => (prev ? prev : apiRes));
+    }
+  }, [
+    station.SwitchSerialNumber,
+    (station as any).switchSerialNumber,
+    station.ResilientSerialNumber,
+    (station as any).resilientSerialNumber,
+  ]);
 
   const handleSwitchSerialChange = (text: string) => {
     setSwitchSerialNumber(text);
@@ -1037,9 +1095,15 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
       const netState = await NetInfo.fetch();
       const isOnline = netState.isConnected === true && netState.isInternetReachable !== false;
 
-      // Prepare Switch & Resilient Serial Numbers: strictly use user entered values, fallback to N/A (never auto-populate from API)
-      const finalSwitchSerial = switchSerialNumber.trim() || 'N/A';
-      const finalResilientSerial = resilientSerialNumber.trim() || 'N/A';
+      // Prepare Switch & Resilient Serial Numbers: user entered value or populated from API
+      const finalSwitchSerial =
+        switchSerialNumber.trim() ||
+        getApiSerialNumber(station.SwitchSerialNumber || (station as any).switchSerialNumber) ||
+        'N/A';
+      const finalResilientSerial =
+        resilientSerialNumber.trim() ||
+        getApiSerialNumber(station.ResilientSerialNumber || (station as any).resilientSerialNumber) ||
+        'N/A';
 
       const finalSwitchFirmware =
         switchFirmwareNumber.trim() ||
@@ -1205,24 +1269,12 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
       .filter(id => (selectedFiles[id] || []).length > 0);
     const hasAnyPhoto = selectedIds.length > 0;
 
-    // 1. Strict binding check: Switch Serial Number and its photo MUST be submitted together
-    const switchFileType = sortedFileTypes.find(isSwitchSerialType);
-    const hasSwitchPhotoInPending = Boolean(switchFileType);
-    const hasSwitchPhotoSelected = Boolean(
-      switchFileType && (selectedFiles[switchFileType.VendorFileTypeId] || []).length > 0,
-    );
-
-    // 2. Strict binding check: Resilient Serial Number and its photo MUST be submitted together
-    const resilientFileType = sortedFileTypes.find(isResilientSerialType);
-    const hasResilientPhotoInPending = Boolean(resilientFileType);
-    const hasResilientPhotoSelected = Boolean(
-      resilientFileType && (selectedFiles[resilientFileType.VendorFileTypeId] || []).length > 0,
-    );
-
+    // Photos and serial numbers are unbound: user can submit photos, hardware inputs, or both separately
     const hasAnyHardware =
-      (hasSwitchPhotoInPending && Boolean(switchSerialNumber.trim())) ||
-      (hasResilientPhotoInPending && Boolean(resilientSerialNumber.trim())) ||
-      Boolean(switchFirmwareNumber.trim());
+      Boolean(switchSerialNumber.trim()) ||
+      Boolean(resilientSerialNumber.trim()) ||
+      Boolean(switchFirmwareNumber.trim()) ||
+      Boolean(switchPassword.trim());
 
     if (!hasAnyPhoto && !hasAnyHardware) {
       Alert.alert(
@@ -1232,45 +1284,7 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
       return;
     }
 
-    const bindingErrors: string[] = [];
-
-    // Switch Serial binding check: user cannot submit switch serial number without its photo
-    if (hasSwitchPhotoInPending) {
-      if (switchSerialNumber.trim() && !hasSwitchPhotoSelected) {
-        bindingErrors.push(
-          '• Switch Serial Number is entered, but its photo is missing. You cannot submit Switch Serial Number without its photo.',
-        );
-      } else if (!switchSerialNumber.trim() && hasSwitchPhotoSelected) {
-        bindingErrors.push(
-          '• Switch Serial Number photo is captured, but the serial number is empty. Please enter the Switch Serial Number.',
-        );
-      }
-    }
-
-    // Resilient Serial binding check: user cannot submit resilient serial number without its photo
-    if (hasResilientPhotoInPending) {
-      if (resilientSerialNumber.trim() && !hasResilientPhotoSelected) {
-        bindingErrors.push(
-          '• Resilient Serial Number is entered, but its photo is missing. You cannot submit Resilient Serial Number without its photo.',
-        );
-      } else if (!resilientSerialNumber.trim() && hasResilientPhotoSelected) {
-        bindingErrors.push(
-          '• Resilient Serial Number photo is captured, but the serial number is empty. Please enter the Resilient Serial Number.',
-        );
-      }
-    }
-
-    if (bindingErrors.length > 0) {
-      Alert.alert(
-        'Photo & Serial Number Binding Error ⚠️',
-        `Serial number and photo must be uploaded together:\n\n${bindingErrors.join(
-          '\n\n',
-        )}\n\nPlease attach the required photo or enter the corresponding serial number.`,
-      );
-      return;
-    }
-
-    // 3. Annexure-11 check: Annexure-11 should ONLY get submitted when all fields and photos are submitted / getting submitted
+    // Annexure-11 check: Annexure-11 should ONLY get submitted when all fields and photos are submitted / getting submitted
     const annexureFileType = sortedFileTypes.find(isAnnexure11Type);
     const hasAnnexureSelected = Boolean(
       annexureFileType && (selectedFiles[annexureFileType.VendorFileTypeId] || []).length > 0,
@@ -1288,36 +1302,14 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
         }
       });
 
-      // Check switch serial number if card #11 is present in pending
-      if (hasSwitchPhotoInPending) {
-        if (!switchSerialNumber.trim()) {
-          missingForAnnexure.push('• Field: Switch Serial Number');
-        }
-        if (!hasSwitchPhotoSelected) {
-          missingForAnnexure.push('• Photo: Switch Serial Number Photo Proof (#11)');
-        }
+      // Check switch serial number
+      if (!switchSerialNumber.trim()) {
+        missingForAnnexure.push('• Field: Switch Serial Number');
       }
 
-      // Check resilient serial number if card #12 is present in pending
-      if (hasResilientPhotoInPending) {
-        if (!resilientSerialNumber.trim()) {
-          missingForAnnexure.push('• Field: Resilient Serial Number');
-        }
-        if (!hasResilientPhotoSelected) {
-          missingForAnnexure.push('• Photo: Resilient Serial Number Photo Proof (#12)');
-        }
-      }
-
-      // Check switch firmware number
-      const hasFirmwareEntered =
-        Boolean(switchFirmwareNumber.trim()) ||
-        Boolean(
-          station.SwitchFirmWareNumber &&
-          station.SwitchFirmWareNumber !== 'N/A' &&
-          station.SwitchFirmWareNumber !== 'NA',
-        );
-      if (!hasFirmwareEntered) {
-        missingForAnnexure.push('• Field: Switch Firmware Version / Number');
+      // Check resilient serial number
+      if (!resilientSerialNumber.trim()) {
+        missingForAnnexure.push('• Field: Resilient Serial Number');
       }
 
       if (missingForAnnexure.length > 0) {
@@ -1348,8 +1340,8 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
   const totalCount = sortedFileTypes.length;
   const hasAnyPhoto = totalPhotosCount > 0;
   const hasAnyHardware =
-    (hasSwitchInPending && Boolean(switchSerialNumber.trim())) ||
-    (hasResilientInPending && Boolean(resilientSerialNumber.trim())) ||
+    Boolean(switchSerialNumber.trim()) ||
+    Boolean(resilientSerialNumber.trim()) ||
     Boolean(switchFirmwareNumber.trim()) ||
     Boolean(switchPassword.trim());
   const isSubmitDisabled = (!hasAnyPhoto && !hasAnyHardware) || isSubmitting;
@@ -1421,8 +1413,8 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
                   </View>
                   <View style={styles.typeHeaderPillsRow}>
                     {isBoundHardwareCard && (
-                      <View style={styles.statusPillBound}>
-                        <Text style={styles.statusTextBound}>🔗 Bound S/N + Photo</Text>
+                      <View style={styles.statusPillHardware}>
+                        <Text style={styles.statusTextHardware}>⌨️ Equipment S/N</Text>
                       </View>
                     )}
                     {isAnnexureCard && (
@@ -1526,69 +1518,6 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
                       autoCapitalize="characters"
                       autoCorrect={false}
                     />
-
-                    {isSwitchCard && (
-                      <TouchableOpacity
-                        style={styles.switchFilesCardBtn}
-                        onPress={() => setShowSwitchFilesModal(true)}
-                        activeOpacity={0.85}>
-                        <View style={styles.switchFilesCardLeft}>
-                          <Text style={styles.switchFilesCardIcon}>💾</Text>
-                          <View style={styles.switchFilesCardTexts}>
-                            <Text style={styles.switchFilesCardTitle}>
-                              Switch Firmware &amp; Config Files
-                            </Text>
-                            <Text style={styles.switchFilesCardSub}>
-                              switchfirmware.imag &amp; switchconfig.cfg • Download &amp; Share
-                            </Text>
-                          </View>
-                        </View>
-                        <Text style={styles.switchFilesCardArrow}>➔</Text>
-                      </TouchableOpacity>
-                    )}
-
-                    {/* Switch Password (only shown if SwitchPassword is null in pending station) */}
-                    {isSwitchCard && !isSwitchPasswordCaptured && (
-                      <View style={styles.boundPasswordContainer}>
-                        <View style={styles.boundSerialHeaderRow}>
-                          <View style={styles.boundSerialTitleWrap}>
-                            <Text style={styles.boundSerialIcon}>🔑</Text>
-                            <Text style={styles.boundSerialTitle}>Switch Password</Text>
-                          </View>
-                          {Boolean(switchPassword) && (
-                            <TouchableOpacity
-                              style={styles.clearSerialBtn}
-                              onPress={() => handleSwitchPasswordChange('')}
-                              activeOpacity={0.7}>
-                              <Text style={styles.clearSerialBtnText}>✕ Clear</Text>
-                            </TouchableOpacity>
-                          )}
-                        </View>
-                        <View style={styles.passwordInputRow}>
-                          <TextInput
-                            style={styles.passwordTextInput}
-                            placeholder="Enter Switch Password (or leave empty)"
-                            placeholderTextColor="#94A3B8"
-                            value={switchPassword}
-                            onChangeText={handleSwitchPasswordChange}
-                            autoCapitalize="none"
-                            autoCorrect={false}
-                            secureTextEntry={!showSwitchPassword}
-                          />
-                          <TouchableOpacity
-                            style={styles.passwordVisibilityBtn}
-                            onPress={() => setShowSwitchPassword(!showSwitchPassword)}
-                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                            <Text style={styles.passwordVisibilityText}>
-                              {showSwitchPassword ? '👁️' : '👁️‍🗨️'}
-                            </Text>
-                          </TouchableOpacity>
-                        </View>
-                        <Text style={styles.passwordNoteText}>
-                          ℹ️ Switch password is not yet captured. If entered, it will be saved; otherwise submitted as null.
-                        </Text>
-                      </View>
-                    )}
 
                     <View style={styles.boundPhotoSectionDivider}>
                       <Text style={styles.boundPhotoSectionTitle}>
@@ -1721,11 +1650,11 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
         </View>
       )}
 
-      {/* Switch Firmware Verification Card */}
+      {/* Hardware & Switch Firmware Verification Card */}
       <View style={styles.hardwareCard}>
         <View style={styles.hardwareCardHeader}>
           <View style={styles.hardwareHeaderTitleRow}>
-            <Text style={styles.hardwareCardTitle}>⚡ Switch Firmware Verification</Text>
+            <Text style={styles.hardwareCardTitle}>⚡ Hardware &amp; Switch Verification</Text>
             {station.RouteStationStatusId ? (
               <View style={styles.routeStatusBadge}>
                 <Text style={styles.routeStatusBadgeText}>
@@ -1735,12 +1664,64 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
             ) : null}
           </View>
           <Text style={styles.hardwareCardSub}>
-            Enter the active switch firmware version running on the hardware switch.
+            Verify switch &amp; resilient serial numbers, and switch firmware version running on hardware.
           </Text>
         </View>
 
+        {/* Switch Serial Number (shown here if Switch card #11 is not in remaining photo types) */}
+        {!hasSwitchInPending && (
+          <View style={styles.hardwareInputGroup}>
+            <View style={styles.hardwareLabelRow}>
+              <Text style={styles.hardwareLabel}>Switch Serial Number</Text>
+              {Boolean(switchSerialNumber) && (
+                <TouchableOpacity
+                  style={styles.clearSerialBtn}
+                  onPress={() => handleSwitchSerialChange('')}
+                  activeOpacity={0.7}>
+                  <Text style={styles.clearSerialBtnText}>✕ Clear</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+            <TextInput
+              style={styles.hardwareInput}
+              placeholder="Enter Switch Serial No. (e.g. 2660H2515XLH)"
+              placeholderTextColor="#94A3B8"
+              value={switchSerialNumber}
+              onChangeText={handleSwitchSerialChange}
+              autoCapitalize="characters"
+              autoCorrect={false}
+            />
+          </View>
+        )}
+
+        {/* Resilient Serial Number (shown here if Resilient card #12 is not in remaining photo types) */}
+        {!hasResilientInPending && (
+          <View style={[styles.hardwareInputGroup, !hasSwitchInPending ? { marginTop: 14 } : null]}>
+            <View style={styles.hardwareLabelRow}>
+              <Text style={styles.hardwareLabel}>Resilient Serial Number</Text>
+              {Boolean(resilientSerialNumber) && (
+                <TouchableOpacity
+                  style={styles.clearSerialBtn}
+                  onPress={() => handleResilientSerialChange('')}
+                  activeOpacity={0.7}>
+                  <Text style={styles.clearSerialBtnText}>✕ Clear</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+            <TextInput
+              style={styles.hardwareInput}
+              placeholder="Enter Resilient Serial No. (e.g. 202607310903)"
+              placeholderTextColor="#94A3B8"
+              value={resilientSerialNumber}
+              onChangeText={handleResilientSerialChange}
+              autoCapitalize="characters"
+              autoCorrect={false}
+            />
+          </View>
+        )}
+
         {/* 3. Switch Firmware Number */}
-        <View style={styles.hardwareInputGroup}>
+        <View style={[styles.hardwareInputGroup, (!hasSwitchInPending || !hasResilientInPending) ? { marginTop: 14 } : null]}>
           <View style={styles.hardwareLabelRow}>
             <Text style={styles.hardwareLabel}>
               Switch Firmware Version / Number
@@ -1758,46 +1739,6 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
             ℹ️ Enter the firmware version running on the hardware switch.
           </Text>
         </View>
-
-        {/* Switch Password (shown here if Switch card #11 is not in remaining photo types and SwitchPassword is null) */}
-        {!hasSwitchInPending && !isSwitchPasswordCaptured && (
-          <View style={[styles.hardwareInputGroup, { marginTop: 14 }]}>
-            <View style={styles.hardwareLabelRow}>
-              <Text style={styles.hardwareLabel}>🔑 Switch Password</Text>
-              {Boolean(switchPassword) && (
-                <TouchableOpacity
-                  style={styles.clearSerialBtn}
-                  onPress={() => handleSwitchPasswordChange('')}
-                  activeOpacity={0.7}>
-                  <Text style={styles.clearSerialBtnText}>✕ Clear</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-            <View style={styles.passwordInputRow}>
-              <TextInput
-                style={styles.passwordTextInput}
-                placeholder="Enter Switch Password (or leave empty)"
-                placeholderTextColor="#94A3B8"
-                value={switchPassword}
-                onChangeText={handleSwitchPasswordChange}
-                autoCapitalize="none"
-                autoCorrect={false}
-                secureTextEntry={!showSwitchPassword}
-              />
-              <TouchableOpacity
-                style={styles.passwordVisibilityBtn}
-                onPress={() => setShowSwitchPassword(!showSwitchPassword)}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                <Text style={styles.passwordVisibilityText}>
-                  {showSwitchPassword ? '👁️' : '👁️‍🗨️'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-            <Text style={styles.passwordNoteText}>
-              ℹ️ Switch password is not yet captured. If entered, it will be saved; otherwise submitted as null.
-            </Text>
-          </View>
-        )}
       </View>
 
       {/* Substation Proximity & Auto Remarks Card (replaces manual remarks field) */}
@@ -1999,12 +1940,6 @@ export const InstallationProofSection: React.FC<InstallationProofSectionProps> =
         visible={showAnnexureModal}
         station={station}
         onClose={() => setShowAnnexureModal(false)}
-      />
-
-      {/* Switch Firmware & Config Modal */}
-      <SwitchFilesModal
-        visible={showSwitchFilesModal}
-        onClose={() => setShowSwitchFilesModal(false)}
       />
     </View>
   );
@@ -2891,6 +2826,19 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
     color: '#4338CA',
+  },
+  statusPillHardware: {
+    backgroundColor: '#EFF6FF',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  statusTextHardware: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#1D4ED8',
   },
   statusPillAnnexure: {
     backgroundColor: '#FEF3C7',

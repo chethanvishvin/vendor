@@ -9,6 +9,7 @@ import {
   ToastAndroid,
   Image,
   TouchableOpacity,
+  StatusBar,
 } from 'react-native';
 import {
   SafeAreaProvider,
@@ -206,6 +207,7 @@ export default function App() {
               resizeMode="contain"
             />
           </View>
+          <Text style={styles.splashCompanyName}>Vishvin Technologies Pvt Ltd</Text>
           <ActivityIndicator size="large" color="#0284C7" />
           <Text style={styles.splashText}>Verifying application version...</Text>
         </View>
@@ -246,7 +248,10 @@ export default function App() {
   // 5. Existing Normal Application Tree
   return (
     <SafeAreaProvider>
-      <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+      <StatusBar barStyle="dark-content" />
+      <SafeAreaView
+        style={styles.safeArea}
+        edges={['top', 'bottom']}>
         {/* Real-time Network Connectivity Bar at Top of Every Screen */}
         <NetworkStatusBar />
 
@@ -301,6 +306,14 @@ const styles = StyleSheet.create({
   splashLogo: {
     width: 52,
     height: 52,
+  },
+  splashCompanyName: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0F172A',
+    marginBottom: 20,
+    letterSpacing: 0.3,
+    textAlign: 'center',
   },
   splashText: {
     marginTop: 16,

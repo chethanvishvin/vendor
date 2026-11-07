@@ -28,17 +28,28 @@ import {
   FetchSingleStationWorkerDropdownResponse,
   InsertAssignToWorkerRequest,
   InsertAssignToWorkerResponse,
+  ApkFetchCompletedStationResponse,
+  CompletedStationItem,
 } from '../types';
 
 const ENDPOINTS = [
-  'https://rna.vishvin.com/api/rna-service',
+  'http://192.168.23.91:5080/rna-service',
 ];
 
 let activeEndpointIndex = 0;
 
 export const getActiveBaseUrl = () => ENDPOINTS[activeEndpointIndex];
 // In-memory cache for base64 installation photos
-const imageBase64Cache = new Map<number, string>();
+const imageBase64Cache = new Map<number | string, string>();
+
+export const clearInstallationImageCache = (fileId?: number) => {
+  if (fileId !== undefined) {
+    imageBase64Cache.delete(`view_file_${fileId}`);
+    imageBase64Cache.delete(fileId);
+  } else {
+    imageBase64Cache.clear();
+  }
+};
 
 async function fetchWithFallback(
   path: string,
@@ -443,6 +454,172 @@ export const apiService = {
       );
     }
     return data;
+  },
+
+  async createReUploadInstallationSubmission(
+    formData: FormData,
+  ): Promise<InstallationSubmissionResponse> {
+    let response: Response | null = null;
+    let lastError: any = null;
+
+    // Try primary URL, then explicit 192.168.23.82 as instructed, then fallback
+    const targetUrls = [
+      `${getActiveBaseUrl()}/assignVendor/createReUploadInstallationSubmission`,
+      'http://192.168.23.82:5080/rna-service/assignVendor/createReUploadInstallationSubmission',
+      'http://192.168.23.91:5080/rna-service/assignVendor/createReUploadInstallationSubmission',
+    ];
+
+    for (const url of targetUrls) {
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+          },
+          body: formData,
+        });
+        if (res.ok || res.status < 500) {
+          response = res;
+          break;
+        }
+      } catch (err) {
+        lastError = err;
+      }
+    }
+
+    if (!response) {
+      if (lastError) throw lastError;
+      throw new Error('Unable to connect to re-upload submission endpoint.');
+    }
+
+    const data = await parseResponseJsonSafe(
+      response,
+      'Failed to re-upload installation proof.',
+    );
+    if (!response.ok || (data.status === false || data.success === false)) {
+      throw new Error(
+        data.message || 'Failed to re-upload installation proof.',
+      );
+    }
+    return data;
+  },
+
+  async apkfetchCompletedStation(
+    vendorId: number,
+    flagId: number = 1,
+    workerId?: number | null,
+  ): Promise<CompletedStationItem[]> {
+    const payload: any = {
+      flagId,
+      vendorId,
+    };
+    if (workerId) {
+      payload.WorkerId = workerId;
+    }
+
+    const response = await fetchWithFallback(
+      '/apkassignVendor/apkfetchCompletedStation',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify(payload),
+      },
+    );
+
+    const data: ApkFetchCompletedStationResponse = await response.json();
+    if (!response.ok || !data.status) {
+      throw new Error(data.message || 'Failed to fetch completed stations.');
+    }
+    return data.result || [];
+  },
+
+  async viewInstallationSubmissionFile(
+    fileId: number,
+    fileName?: string,
+  ): Promise<string> {
+    const cacheKey = `view_file_${fileId}`;
+    const cached = imageBase64Cache.get(cacheKey);
+    if (cached) return cached;
+
+    const primaryEndpoint = '/assignVendor/ViewInstallationSubmissionFile';
+    const fallbackEndpoint = '/apkassignVendor/fetchInstallationSubmissionFile';
+
+    let response: Response | null = null;
+    let lastError: any = null;
+
+    try {
+      response = await fetchWithFallback(primaryEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: '*/*',
+        },
+        body: JSON.stringify({
+          InstallationSubmissionFileId: fileId,
+          installationSubmissionFileId: fileId,
+          flagId: 2,
+          fileName: fileName || '',
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Endpoint ${primaryEndpoint} returned status ${response.status}`);
+      }
+    } catch (err: any) {
+      lastError = err;
+      try {
+        response = await fetchWithFallback(fallbackEndpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: '*/*',
+          },
+          body: JSON.stringify({
+            InstallationSubmissionFileId: fileId,
+            flagId: 2,
+          }),
+        });
+        if (!response.ok) {
+          throw new Error(`Fallback returned status ${response.status}`);
+        }
+      } catch (fallbackErr: any) {
+        throw new Error(
+          `Failed to load photo #${fileId}: ${lastError?.message || fallbackErr?.message}`,
+        );
+      }
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const json = await response.json();
+      if (json.base64) {
+        const uri = json.base64.startsWith('data:')
+          ? json.base64
+          : `data:image/jpeg;base64,${json.base64}`;
+        imageBase64Cache.set(cacheKey, uri);
+        return uri;
+      }
+      if (json.url || json.fileUrl) {
+        const u = json.url || json.fileUrl;
+        imageBase64Cache.set(cacheKey, u);
+        return u;
+      }
+    }
+
+    const blob = await response.blob();
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64data = reader.result as string;
+        imageBase64Cache.set(cacheKey, base64data);
+        resolve(base64data);
+      };
+      reader.onerror = () => reject(new Error('Failed to convert blob to base64'));
+      reader.readAsDataURL(blob);
+    });
   },
 
   async fetchDashboardCount(
